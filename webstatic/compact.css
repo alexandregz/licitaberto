@@ -1,0 +1,59 @@
+/* Compact UI overrides sobre Pico */
+:root { font-size: 14px; }             /* ↓ tipografía global (antes ≈16px) */
+@media (min-width: 1400px){ :root{ font-size: 15px; } }
+
+body { line-height: 1.35; }
+
+.container, .container-fluid { max-width: 1100px; }
+
+/* Titulares máis discretos */
+h1 { font-size: 1.6rem; margin: .75rem 0; }
+h2 { font-size: 1.25rem; margin: .5rem 0; }
+h3 { font-size: 1.1rem; margin: .5rem 0; }
+
+/* Formularios compactos */
+input, select, textarea { font-size: .9rem; padding: .35rem .5rem; min-height: 2rem; }
+button { font-size: .9rem; padding: .35rem .6rem; min-height: 2rem; }
+
+/* Toolbar/filtros */
+.toolbar { gap: .5rem; }
+.toolbar label span { font-size: .8rem; opacity: .8; }
+
+/* Táboas máis densas */
+table { font-size: .85rem; }
+th, td { padding: .3rem .5rem; }
+
+/* Navegación superior */
+nav ul li a { padding: .25rem .5rem; }
+
+/* Cartas/seccións */
+article, section { padding: .75rem; }
+
+/* Gráfica máis baixiña por defecto */
+canvas { max-height: 220px; }
+
+/* Evitar bordo tipo “pill” en botóns e formularios (Pico v2 override) */
+:root{
+  /* radios máis pequenos e uniformes */
+  --pico-border-radius: .375rem;
+  --pico-form-element-border-radius: .375rem;
+}
+
+/* por se algún compoñente fixa un radio enorme */
+button,
+a[role="button"],
+input[type="submit"],
+input[type="button"],
+input[type="search"],
+select,
+textarea {
+  border-radius: .375rem !important;
+}
+
+/* opcional: facer aínda máis compacto na barra de filtros */
+.toolbar input,
+.toolbar select,
+.toolbar button {
+  padding: .35rem .6rem;
+  min-height: 2rem;
+}

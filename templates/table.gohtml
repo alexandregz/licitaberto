@@ -1,0 +1,243 @@
+{{ define "table.gohtml" }}
+<!doctype html>
+<html lang="gl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{{ .Table }} · SQLite Viewer</title>
+  <link rel="stylesheet" href="/static/pico.min.css">
+  <link rel="stylesheet" href="/static/compact.css">
+
+  <!-- IMPORTA Chart.js ANTES de usalo -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+
+<header class="container-fluid nav">
+  <nav>
+    <ul><li><strong><a href="/">SQLite Viewer</a></strong></li></ul>
+    <ul>
+      <li><a href="/">Táboas</a></li>
+      <li><a href="/export/csv?table={{ .Table }}&q={{ .Q }}&order={{ .Order }}&dir={{ if .Desc }}DESC{{ end }}">CSV</a></li>
+      <li><a href="/export/xlsx?table={{ .Table }}&q={{ .Q }}&order={{ .Order }}&dir={{ if .Desc }}DESC{{ end }}">XLSX</a></li>
+    </ul>
+  </nav>
+</header>
+
+<main class="container">
+  <h2>{{ .Table }}</h2>
+
+  <!-- GET clásico (segue funcionando sen JS) -->
+  <form method="get" action="/table/{{ .Table }}" role="search" class="toolbar">
+    <label>
+      <span>Buscar</span>
+      <input type="search" name="q" value="{{ .Q }}" placeholder="buscar..." />
+    </label>
+    <label>
+      <span>Ordenar por</span>
+      <select name="order">
+        <option value="">(sen orde)</option>
+        {{ range .Cols }}<option value="{{ .Name }}" {{ if eq $.Order .Name }}selected{{ end }}>{{ .Name }}</option>{{ end }}
+      </select>
+    </label>
+    <label>
+      <span>Dirección</span>
+      <select name="dir">
+        <option value="">ASC</option>
+        <option value="DESC" {{ if .Desc }}selected{{ end }}>DESC</option>
+      </select>
+    </label>
+    <label>
+      <span>Gráfica por</span>
+      <select name="chartBy">
+        <option value="">(sen gráfica)</option>
+        {{ range .Cols }}<option value="{{ .Name }}" {{ if eq $.ChartBy .Name }}selected{{ end }}>{{ .Name }}</option>{{ end }}
+      </select>
+    </label>
+    <button type="submit">Aplicar</button>
+  </form>
+
+    <nav aria-label="pagination">
+    <ul>
+      {{ if .HasPrev }}
+        <li><a id="prev" href="?q={{ .Q }}&order={{ .Order }}&dir={{ if .Desc }}DESC{{ end }}&chartBy={{ .ChartBy }}&page={{ .PrevPage }}">← Anterior</a></li>
+      {{ else }}
+        <li><a id="prev" aria-disabled="true" data-page="1">← Anterior</a></li>
+      {{ end }}
+      <li><small>Total: <span id="total">{{ .Total }}</span> · Páxina <span id="page">{{ .Page }}</span> de <span id="pages">{{ .Pages }}</span></small></li>
+      {{ if .HasNext }}
+        <li><a id="next" href="?q={{ .Q }}&order={{ .Order }}&dir={{ if .Desc }}DESC{{ end }}&chartBy={{ .ChartBy }}&page={{ .NextPage }}">Seguinte →</a></li>
+      {{ else }}
+        <li><a id="next" aria-disabled="true" data-page="{{ .Pages }}">Seguinte →</a></li>
+      {{ end }}
+    </ul>
+  </nav>
+
+  {{ if .ChartBy }}
+  <article>
+    <h3>Conteo por “{{ .ChartBy }}”</h3>
+    <canvas id="chart" height="140"></canvas>
+  </article>
+  {{ end }}
+
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          {{ range .Cols }}<th>{{ .Name }}</th>{{ end }}
+        </tr>
+      </thead>
+            <tbody id="rows">
+            {{ range .Rows }}
+                <tr>
+                {{ $row := . }}
+                {{ range $.Cols }}
+                <td>
+                    {{/* se é "Expediente", enlaza se non é TABLE_files */}}
+                    {{ if eq .Name "Expediente" }}
+                        {{ $exp := index $row .Name }}
+                        {{ if and $exp (not (hasSuffix $.Table "_files")) }}
+                            <a href="/table/{{ $.Table }}_files?q={{ $exp }}&order=&page=1">{{ $exp }}</a>                            
+                        {{ else }}
+                            {{ $exp }}
+                        {{ end }}
+                    {{/* se é "filename", enlaza aos ficheiros fisicos */}}
+                    {{ else if eq .Name "filename" }}
+                        {{ $file := index $row .Name }}
+                        {{ $exp2 := index $row "Expediente" }}
+                        <a href="{{ $.PDFPath }}/{{ replace $exp2 "/" "_" }}/{{ $file }}" target="_blank">{{ $file }}</a>
+                    {{ else }}
+                        {{ index $row .Name }}
+                    {{ end }}
+                </td>
+                {{ end }}
+                </tr>
+            {{ end }}
+            </tbody>
+    </table>
+  </div>
+
+
+</main>
+
+<!-- Instant Search (3+ chars) + actualización de páxina e gráfica -->
+<script>
+(function(){
+  const table   = "{{ .Table }}";
+  const columns = [{{ range $i, $c := .Cols }}{{ if $i }}, {{ end }}"{{ $c.Name }}"{{ end }}];
+  const input   = document.querySelector('input[name="q"]');
+  const orderEl = document.querySelector('select[name="order"]');
+  const dirEl   = document.querySelector('select[name="dir"]');
+  const chartEl = document.querySelector('select[name="chartBy"]');
+  const tbody   = document.getElementById('rows');
+  const totalEl = document.getElementById('total');
+  const pageEl  = document.getElementById('page');
+  const pagesEl = document.getElementById('pages');
+  const prevA   = document.getElementById('prev');
+  const nextA   = document.getElementById('next');
+
+  let currentPage = {{ .Page }};
+  let chart;
+  const ctx = document.getElementById('chart')?.getContext('2d');
+  if (ctx && window.Chart) {
+    chart = new Chart(ctx, {
+      type: 'bar',
+      data: { labels: {{ .ChartLabelsJSON }}, datasets: [{ label: 'Conteo', data: {{ .ChartCountsJSON }} }] },
+      options: { responsive: true }
+    });
+  }
+
+  function debounce(fn, ms){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
+
+  async function load(page) {
+    const q = (input?.value || "").trim();
+    if (q.length>0 && q.length<3) return; // só dende 3 chars (ou baleiro)
+    const params = new URLSearchParams({
+      q, order: orderEl?.value || "", dir: dirEl?.value || "", chartBy: chartEl?.value || "", page: String(page||1)
+    });
+    const res = await fetch(`/api/table/${encodeURIComponent(table)}?`+params.toString());
+    if (!res.ok) return;
+    const data = await res.json();
+
+    // TÁBOA
+    const frag = document.createDocumentFragment();
+    for (const r of data.rows) {
+        const tr = document.createElement('tr');
+        for (const c of columns) {
+            const td = document.createElement('td');
+            const val = r[c] ?? "";
+
+            // se é "Expediente", enlaza se non é TABLE_files 
+            if (c === "Expediente" && val && !table.endsWith("_files")) {
+                const a = document.createElement('a');
+                a.href = `/table/${encodeURIComponent(table)}_files?q=${encodeURIComponent(val)}`;
+                a.textContent = val;
+                td.appendChild(a);
+            }
+            // se é "filename", enlaza aos ficheiros fisicos
+            else if(c === "filename") {
+                console.log(" r[Expediente].replace(/\//g, '_): " + r["Expediente"].replace(/\//g, "_"));
+                const a = document.createElement('a');
+                a.href = '{{ .PDFPath }}/' + r["Expediente"].replace(/\//g, "_") + '/' + encodeURIComponent(val);
+                a.textContent = val;
+                a.target = "_blank";
+                td.appendChild(a);
+            }
+            else {
+                td.textContent = val;
+            }
+            tr.appendChild(td);
+        }
+        frag.appendChild(tr);
+    }
+    tbody.innerHTML = "";
+    tbody.appendChild(frag);
+
+
+    // Paginación / contadores
+    totalEl.textContent = data.total;
+    currentPage = data.page;
+    pageEl.textContent  = data.page;
+    pagesEl.textContent = data.pages;
+    prevA.dataset.page = Math.max(1, data.page-1);
+    nextA.dataset.page = Math.min(data.pages, data.page+1);
+    if (prevA.hasAttribute('href')) prevA.removeAttribute('href');
+    if (nextA.hasAttribute('href')) nextA.removeAttribute('href');
+    prevA.setAttribute('aria-disabled', data.page<=1 ? 'true':'false');
+    nextA.setAttribute('aria-disabled', data.page>=data.pages ? 'true':'false');
+
+    // Gráfica
+    if (chart) {
+      if (data.chartBy) {
+        chart.data.labels = data.chartLabels;
+        chart.data.datasets[0].data = data.chartCounts;
+      } else {
+        chart.data.labels = [];
+        chart.data.datasets[0].data = [];
+      }
+      chart.update();
+    }
+
+    // Actualiza a URL (sen recarga)
+    const url = new URL(location.href);
+    url.searchParams.set('q', q);
+    url.searchParams.set('order', orderEl?.value || "");
+    if (dirEl?.value) url.searchParams.set('dir', dirEl.value); else url.searchParams.delete('dir');
+    if (chartEl?.value) url.searchParams.set('chartBy', chartEl.value); else url.searchParams.delete('chartBy');
+    url.searchParams.set('page', data.page);
+    history.replaceState(null, '', url);
+  }
+
+  const loadDebounced = debounce(()=>load(1), 180);
+  input?.addEventListener('input', loadDebounced);
+  orderEl?.addEventListener('change', ()=>load(1));
+  dirEl?.addEventListener('change',   ()=>load(1));
+  chartEl?.addEventListener('change', ()=>load(1));
+  prevA?.addEventListener('click', (e)=>{ e.preventDefault(); if (currentPage>1) load(currentPage-1); });
+  nextA?.addEventListener('click', (e)=>{ e.preventDefault(); load(currentPage+1); });
+})();
+</script>
+
+</body>
+</html>
+{{ end }}
