@@ -4,7 +4,7 @@ Licitacións de concelhos da Plataforma de Contratación do Sector Público: [ht
 
 ## Que
 
-Frontend de licitacións dun concelho/s dado/s  para revisar visual e rapidamente as contratacións e licitacións dadas de alta na Plataforma de Contratación do Sector Público.
+Frontend de licitacións dun concelho/s dado/s para revisar visual e rapidamente as contratacións e licitacións dadas de alta na Plataforma de Contratación do Sector Público.
 
 ## Como
 
@@ -44,3 +44,16 @@ alex@vosjod:~/Development/licitaberto $ go run . --db ../plataforma_contratacion
 ## Docker
 
 ToDo
+
+
+## Screenshots
+
+![Listado de taboas](imaxes/001.png)
+
+![Táboa](imaxes/002.png)
+
+![Gráfica desplegada](imaxes/003.png)
+
+![Outra tábaos](imaxes/004.png)
+
+![Exemplo de táboa de ficheiros](imaxes/005.png)
