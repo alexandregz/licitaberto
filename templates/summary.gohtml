@@ -1,0 +1,176 @@
+{{ define "summary.gohtml" }}
+<!doctype html>
+<html lang="gl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Resumo · {{ .Table }}</title>
+  <link rel="stylesheet" href="/static/pico.min.css">
+  <link rel="stylesheet" href="/static/compact.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    header.nav { position: sticky; top: 0; backdrop-filter: blur(6px); }
+    .grid { display: grid; gap: 1.25rem; grid-template-columns: repeat(12, 1fr); }
+    .card { padding: 1rem; border: 1px solid rgba(0,0,0,.08); border-radius: .5rem; }
+    .span-6 { grid-column: span 6; }
+    .span-12{ grid-column: span 12; }
+    @media (max-width: 1024px){ .span-6{ grid-column: span 12; } }
+    canvas { max-height: 360px; }
+    .toolbar { display: grid; gap: .75rem; grid-template-columns: 1fr 260px auto; align-items: end; }
+    @media (max-width: 840px){ .toolbar { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+<header class="container-fluid nav">
+  <nav>
+    <ul><li><strong>Gráficas</strong></li></ul>
+    <ul>
+      <li><a href="/">Táboas</a></li>
+    </ul>
+  </nav>
+</header>
+
+<main class="container">
+  <form method="get" action="/summary" class="toolbar" role="search">
+    <label>
+      <span>Buscar</span>
+      <input type="search" name="q" value="{{ .Q }}" placeholder="ex.: adxudicatario, obxecto, importe..." />
+    </label>
+    <label>
+      <span>Táboa</span>
+      <select name="table">
+        {{ range .Tables }}
+          <option value="{{ . }}" {{ if eq $.Table . }}selected{{ end }}>{{ . }}</option>
+        {{ end }}
+      </select>
+    </label>
+    <div>
+      <button type="submit">Aplicar</button>
+      <a role="button" href="/summary">Limpar</a>
+      <a role="button" class="secondary" href="/table/{{ .Table }}">Ver listado</a>
+    </div>
+  </form>
+
+  {{ if .Q }}
+    <p><small>Filtro aplicado: <mark>{{ .Q }}</mark> · {{ if .FilesTable }}anexos en <code>{{ .FilesTable }}</code>{{ else }}sen táboa de anexos{{ end }}</small></p>
+  {{ else }}
+    <p><small>{{ if .FilesTable }}anexos en <code>{{ .FilesTable }}</code>{{ else }}sen táboa de anexos{{ end }}</small></p>
+  {{ end }}
+
+  <div class="grid">
+    <section class="card span-6">
+      <h3>1. Nº de contratos por tipo</h3>
+      <canvas id="chartTipos"></canvas>
+    </section>
+
+    <section class="card span-6">
+      <h3>2. Importe total por tipo (€)</h3>
+      <canvas id="chartImportes"></canvas>
+    </section>
+
+    <section class="card span-12">
+      <h3>3. Top 10 adxudicatarios por nº de contratos</h3>
+      <canvas id="chartAdxudicatarios"></canvas>
+    </section>
+
+    <section class="card span-6">
+      <h3>4. Contratos con anexos PDF</h3>
+      <canvas id="chartAnexos"></canvas>
+    </section>
+  </div>
+</main>
+
+<script>
+const TiposLabels = {{ .TiposLabels }};
+const TiposCounts = {{ .TiposCounts }};
+const ImpLabels   = {{ .ImpLabels }};
+const ImpTotals   = {{ .ImpTotals }};
+const AdxLabels   = {{ .AdxLabels }};
+const AdxCounts   = {{ .AdxCounts }};
+const AnexosLabels= {{ .AnexosLabels }};
+const AnexosCounts= {{ .AnexosCounts }};
+
+// crear charts
+const chTipos = new Chart(document.getElementById('chartTipos'), {
+  type: 'bar',
+  data: { labels: TiposLabels, datasets: [{ label: 'Contratos', data: TiposCounts }] },
+  options: { responsive: true, plugins:{ legend:{ display:false } } }
+});
+const chImp = new Chart(document.getElementById('chartImportes'), {
+  type: 'bar',
+  data: { labels: ImpLabels, datasets: [{ label: '€ total', data: ImpTotals }] },
+  options: {
+    responsive: true,
+    plugins:{ legend:{ display:false }, tooltip: { callbacks: {
+      label: (ctx)=> new Intl.NumberFormat('es-ES',{style:'currency',currency:'EUR'}).format(ctx.parsed.y)
+    }}},
+    scales: { y: { ticks: { callback: (v)=> new Intl.NumberFormat('es-ES').format(v) } } }
+  }
+});
+const chAdx = new Chart(document.getElementById('chartAdxudicatarios'), {
+  type: 'bar',
+  data: { labels: AdxLabels, datasets: [{ label: 'Contratos', data: AdxCounts }] },
+  options: { indexAxis: 'y', responsive: true, plugins:{ legend:{ display:false } }, scales: { x: { beginAtZero: true } } }
+});
+const chAnx = new Chart(document.getElementById('chartAnexos'), {
+  type: 'pie',
+  data: { labels: AnexosLabels, datasets: [{ data: AnexosCounts }] },
+  options: { responsive: true }
+});
+
+// instant search
+const form   = document.querySelector('form[role="search"]');
+const qInput = form.querySelector('input[name="q"]');
+const tSel   = form.querySelector('select[name="table"]');
+
+function debounce(fn, ms){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
+
+async function loadSummary() {
+  const q = (qInput.value || "").trim();
+  const table = tSel.value;
+  if (q.length>0 && q.length<3) return; // só dende 3 chars (ou baleiro)
+
+  const params = new URLSearchParams({ q, table });
+  const res = await fetch('/api/summary?' + params.toString());
+  if (!res.ok) return;
+  const data = await res.json();
+
+  // actualizar charts
+  chTipos.data.labels = data.tiposLabels || [];
+  chTipos.data.datasets[0].data = data.tiposCounts || [];
+  chTipos.update();
+
+  chImp.data.labels = data.impLabels || [];
+  chImp.data.datasets[0].data = data.impTotals || [];
+  chImp.update();
+
+  chAdx.data.labels = data.adxLabels || [];
+  chAdx.data.datasets[0].data = data.adxCounts || [];
+  chAdx.update();
+
+  chAnx.data.labels = data.anexosLabels || [];
+  chAnx.data.datasets[0].data = data.anexosCounts || [];
+  chAnx.update();
+
+  // actualizar URL sen recargar
+  const url = new URL(location.href);
+  if (q) url.searchParams.set('q', q); else url.searchParams.delete('q');
+  url.searchParams.set('table', table);
+  history.replaceState(null, '', url);
+}
+
+const loadDebounced = debounce(loadSummary, 180);
+
+// impedir recarga co botón "Aplicar"
+form.addEventListener('submit', (e)=>{ e.preventDefault(); loadSummary(); });
+
+// instant search: 3+ chars
+qInput.addEventListener('input', loadDebounced);
+
+// cambio de táboa → refrescar xa
+tSel.addEventListener('change', ()=>{ qInput.value = qInput.value.trim(); loadSummary(); });
+</script>
+
+</body>
+</html>
+{{ end }}

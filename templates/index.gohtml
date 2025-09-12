@@ -5,11 +5,15 @@
 <link rel="stylesheet" href="/static/pico.min.css">
 <title>SQLite Viewer</title>
 <main class="container">
-  <h2>Táboas</h2>
+  <h2>{{ .concello }}</h2>
+  <h3>Táboas</h3>
   <ul>
   {{ range .Tables }}
     <li><a href="/table/{{ . }}">{{ . }}</a></li>
   {{ end }}
   </ul>
+
+  <p><a href="/summary">→ Gráficas</a></p>
+
 </main>
 {{ end }}
