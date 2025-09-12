@@ -17,6 +17,37 @@ var (
 	dotNumRe  = regexp.MustCompile(`^\s*\d+(\.\d+)?\s*$`)
 )
 
+// --- Normalización simple: quitar acentos e pasar a minúsculas ---
+var accentPairs = []string{
+	"Á", "A", "À", "A", "Â", "A", "Ä", "A", "Ã", "A", "á", "a", "à", "a", "â", "a", "ä", "a", "ã", "a",
+	"É", "E", "È", "E", "Ê", "E", "Ë", "E", "é", "e", "è", "e", "ê", "e", "ë", "e",
+	"Í", "I", "Ì", "I", "Î", "I", "Ï", "I", "í", "i", "ì", "i", "î", "i", "ï", "i",
+	"Ó", "O", "Ò", "O", "Ô", "O", "Ö", "O", "Õ", "O", "ó", "o", "ò", "o", "ô", "o", "ö", "o", "õ", "o",
+	"Ú", "U", "Ù", "U", "Û", "U", "Ü", "U", "ú", "u", "ù", "u", "û", "u", "ü", "u",
+	"Ñ", "N", "ñ", "n", "Ç", "C", "ç", "c",
+}
+
+var noAccentsReplacer = strings.NewReplacer(accentPairs...)
+
+// Normaliza unha cadea en Go (para o parámetro da busca)
+func noAccentsLower(s string) string {
+	s = noAccentsReplacer.Replace(s)
+	return strings.ToLower(s)
+}
+
+// Constrúe a expresión SQL que quita acentos e baixa a minúsculas nunha columna
+// Ex.: sqlNoAccents("CAST(col AS TEXT)") -> LOWER(REPLACE(REPLACE(..., 'Á','A'), ...))
+func sqlNoAccents(expr string) string {
+	s := expr
+	for i := 0; i < len(accentPairs); i += 2 {
+		from, to := accentPairs[i], accentPairs[i+1]
+		s = fmt.Sprintf("REPLACE(%s,'%s','%s')", s, from, to)
+	}
+	return "LOWER(" + s + ")"
+}
+
+// --- Normalización simple ---
+
 func openSQLite(dbPath string) (*sql.DB, error) {
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
@@ -123,11 +154,16 @@ func buildWhereLike(cols []Column, q string) (string, []any) {
 	if q == "" || len(cols) == 0 {
 		return "", nil
 	}
+	// normalizamos o termo de busca en Go
+	nq := "%" + noAccentsLower(q) + "%"
+
 	parts := make([]string, 0, len(cols))
 	args := make([]any, 0, len(cols))
 	for _, c := range cols {
-		parts = append(parts, fmt.Sprintf("CAST(%s AS TEXT) LIKE ?", quoteIdent(c.Name)))
-		args = append(args, "%"+q+"%") // ← un valor por cada "?"
+		colExpr := fmt.Sprintf("CAST(%s AS TEXT)", quoteIdent(c.Name))
+		// normalizamos tamén a columna no SQL
+		parts = append(parts, sqlNoAccents(colExpr)+" LIKE ?")
+		args = append(args, nq)
 	}
 	return "WHERE (" + strings.Join(parts, " OR ") + ")", args
 }
