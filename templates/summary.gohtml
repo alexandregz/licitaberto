@@ -25,12 +25,14 @@
   <nav>
     <ul><li><strong>Gráficas {{ .concello }}</strong></li></ul>
     <ul>
-      <li><a href="/">Táboas</a></li>
+      <li><a href="/">Index</a></li>
     </ul>
   </nav>
 </header>
 
 <main class="container">
+  {{ template "partials/menu" . }}
+  
   <form method="get" action="/summary" class="toolbar" role="search">
     <label>
       <span>Buscar</span>
@@ -47,14 +49,12 @@
     <div>
       <button type="submit">Aplicar</button>
       <a role="button" href="/summary">Limpar</a>
-      <a role="button" class="secondary" href="/table/{{ .Table }}">Ver listado</a>
+      <a role="button" class="secondary" href="/table/{{ .Table }}" id="link_ver_listado">Ver listado</a>
     </div>
   </form>
 
-  {{ if .Q }}
-    <p><small>Filtro aplicado: <mark>{{ .Q }}</mark> · {{ if .FilesTable }}anexos en <code>{{ .FilesTable }}</code>{{ else }}sen táboa de anexos{{ end }}</small></p>
-  {{ else }}
-    <p><small>{{ if .FilesTable }}anexos en <code>{{ .FilesTable }}</code>{{ else }}sen táboa de anexos{{ end }}</small></p>
+
+    <p><small>{{ if .FilesTable }}anexos en <code id="anexos_en_texto">{{ .FilesTable }}</code></small></p>
   {{ end }}
 
   <div class="grid">
@@ -168,7 +168,12 @@ form.addEventListener('submit', (e)=>{ e.preventDefault(); loadSummary(); });
 qInput.addEventListener('input', loadDebounced);
 
 // cambio de táboa → refrescar xa
-tSel.addEventListener('change', ()=>{ qInput.value = qInput.value.trim(); loadSummary(); });
+tSel.addEventListener('change', ()=>{ 
+                                        qInput.value = qInput.value.trim(); 
+                                        document.getElementById('anexos_en_texto').innerText = tSel.value + '_files';
+                                        document.getElementById('link_ver_listado').href = '/table/' + tSel.value; 
+                                        loadSummary(); 
+                                    });
 </script>
 
 </body>

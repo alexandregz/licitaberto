@@ -6,14 +6,14 @@
 <title>SQLite Viewer</title>
 <main class="container">
   <h2>{{ .concello }}</h2>
+
+  {{ template "partials/menu" . }}
+
   <h3>Táboas</h3>
   <ul>
   {{ range .Tables }}
     <li><a href="/table/{{ . }}">{{ . }}</a></li>
   {{ end }}
   </ul>
-
-  <p><a href="/summary">→ Gráficas</a></p>
-
 </main>
 {{ end }}

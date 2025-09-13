@@ -15,9 +15,9 @@
 
 <header class="container-fluid nav">
   <nav>
-    <ul><li><strong><a href="/">SQLite Viewer</a></strong></li></ul>
+    <ul><li><strong>SQLite Viewer</strong></li></ul>
     <ul>
-      <li><a href="/">Táboas {{ .concello }}</a></li>
+      <li><a href="/">Index</a></li>
       <li><a href="/export/csv?table={{ .Table }}&q={{ .Q }}&order={{ .Order }}&dir={{ if .Desc }}DESC{{ end }}">CSV</a></li>
       <li><a href="/export/xlsx?table={{ .Table }}&q={{ .Q }}&order={{ .Order }}&dir={{ if .Desc }}DESC{{ end }}">XLSX</a></li>
     </ul>
@@ -25,10 +25,10 @@
 </header>
 
 <main class="container">
-    <p><a href="/summary">→ Ver gráficas</a></p>
+      {{ template "partials/menu" . }}
 
 
-  <h2>{{ .Table }}</h2>
+  <h2>{{ .concello }} - {{ .Table }}</h2>
 
   <!-- GET clásico (segue funcionando sen JS) -->
   <form method="get" action="/table/{{ .Table }}" role="search" class="toolbar">

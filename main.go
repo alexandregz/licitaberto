@@ -54,7 +54,7 @@ type server struct {
 	perPage int
 }
 
-//go:embed templates/*
+//go:embed templates/* templates/partials/*
 var tplFS embed.FS
 
 func newServer(db *sql.DB) (*server, error) {
@@ -68,8 +68,12 @@ func newServer(db *sql.DB) (*server, error) {
 				"hasPrefix": strings.HasPrefix,  // comprobar prefixo
 				"trim":      strings.TrimSpace,  // quitar espazos arredor
 			}).
-			ParseFS(tplFS, "templates/*.gohtml"),
+			ParseFS(tplFS,
+				"templates/*.gohtml",
+				"templates/partials/*.gohtml",
+			),
 	)
+	log.Printf("templates: %s", tpl.DefinedTemplates())
 
 	return &server{db: db, tpl: tpl, perPage: 25}, nil
 }
