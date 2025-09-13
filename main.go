@@ -73,7 +73,7 @@ func newServer(db *sql.DB) (*server, error) {
 				"templates/partials/*.gohtml",
 			),
 	)
-	log.Printf("templates: %s", tpl.DefinedTemplates())
+	// log.Printf("templates: %s", tpl.DefinedTemplates())
 
 	return &server{db: db, tpl: tpl, perPage: 25}, nil
 }
