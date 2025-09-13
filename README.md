@@ -57,3 +57,5 @@ ToDo
 ![Outra tábaos](imaxes/004.png)
 
 ![Exemplo de táboa de ficheiros](imaxes/005.png)
+
+![sumario con gráficas](imaxes/006.png)
