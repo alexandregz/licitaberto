@@ -1,11 +1,13 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"html/template"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -464,6 +466,13 @@ func (s *server) handleSummaryAll(w http.ResponseWriter, r *http.Request) {
 	adxMensual := map[string]int{}
 	adxMensualImporte := map[string]float64{}
 
+	type topItem struct {
+		Label  string
+		Amount float64
+		URL    string
+	}
+	var topLic []topItem
+
 	var conPDF, total int
 
 	for _, sel := range bases {
@@ -585,6 +594,75 @@ func (s *server) handleSummaryAll(w http.ResponseWriter, r *http.Request) {
 		var partTot int
 		_ = s.db.QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM %s %s`, baseQ, where), args...).Scan(&partTot)
 		total += partTot
+
+		// query para top10 importes
+		if importeCol != "" {
+			// columnas auxiliares (se non existen, devolvemos cadea baleira para non romper Scan)
+			colOrEmpty := func(name string) string {
+				if name == "" {
+					return "''"
+				}
+				return quoteIdent(name)
+			}
+			expCol := pickFirstColumnName(cols, "Expediente")
+			objCol := pickFirstColumnName(cols, "Obxecto", "Objeto", "Asunto", "Descripcion", "Descripción", "Concepto", "Titulo", "Título")
+			// adxCol xa o detectas antes co teu código
+
+			qTop := fmt.Sprintf(`
+					SELECT
+						%s AS expediente,
+						%s AS obxecto,
+						%s AS adx,
+						%s AS imp
+					FROM %s
+					%s
+					ORDER BY imp DESC
+					LIMIT 20
+    `,
+				colOrEmpty(expCol),
+				colOrEmpty(objCol),
+				colOrEmpty(adxCol),
+				sqlToRealEuro(quoteIdent(importeCol)),
+				quoteIdent(sel),
+				where,
+			)
+
+			if rows, err := s.db.Query(qTop, args...); err == nil {
+				for rows.Next() {
+					var exp, obj, adj sql.NullString
+					var imp float64
+					if err := rows.Scan(&exp, &obj, &adj, &imp); err == nil {
+						// etiqueta amigábel
+						label := ""
+						if exp.Valid && strings.TrimSpace(exp.String) != "" {
+							label = strings.TrimSpace(exp.String)
+						}
+						if label == "" && obj.Valid && strings.TrimSpace(obj.String) != "" {
+							label = strings.TrimSpace(obj.String)
+						}
+						if label == "" && adj.Valid && strings.TrimSpace(adj.String) != "" {
+							label = strings.TrimSpace(adj.String)
+						}
+						if label == "" {
+							label = sel
+						}
+						if len(label) > 100 {
+							label = label[:100] + "…"
+						}
+
+						//
+						var urlStr string
+						if exp.Valid && strings.TrimSpace(exp.String) != "" {
+							urlStr = "/table/" + sel + "?q=" + url.QueryEscape(strings.TrimSpace(exp.String))
+						}
+
+						topLic = append(topLic, topItem{Label: label, Amount: imp, URL: urlStr})
+					}
+				}
+				rows.Close()
+			}
+		}
+
 	}
 
 	// pasar mapas a arrays ordenados
@@ -676,6 +754,24 @@ func (s *server) handleSummaryAll(w http.ResponseWriter, r *http.Request) {
 	cntMes, _ := json.Marshal(adxMesCounts)
 	impMes, _ := json.Marshal(adxMesImportes)
 
+	sort.Slice(topLic, func(i, j int) bool { return topLic[i].Amount > topLic[j].Amount })
+	if len(topLic) > 20 {
+		topLic = topLic[:20]
+	}
+
+	var topLicLabels []string
+	var topLicAmounts []float64
+	var topLicURLs []string
+	for _, it := range topLic {
+		topLicLabels = append(topLicLabels, it.Label)
+		topLicAmounts = append(topLicAmounts, it.Amount)
+		topLicURLs = append(topLicURLs, it.URL)
+	}
+
+	lblTop, _ := json.Marshal(topLicLabels)
+	amtTop, _ := json.Marshal(topLicAmounts)
+	urlTop, _ := json.Marshal(topLicURLs)
+
 	data := map[string]any{
 		"Q": q, "Tables": bases,
 		"TiposLabels": js(lblTipos), "TiposCounts": js(cntTipos),
@@ -686,6 +782,9 @@ func (s *server) handleSummaryAll(w http.ResponseWriter, r *http.Request) {
 		"AdxMesLabels":   template.JS(lblMes),
 		"AdxMesCounts":   template.JS(cntMes),
 		"AdxMesImportes": template.JS(impMes),
+		"TopLicLabels":   template.JS(lblTop),
+		"TopLicAmounts":  template.JS(amtTop),
+		"TopLicURLs":     template.JS(urlTop),
 	}
 	if err := s.tpl.ExecuteTemplate(w, "summary_all.gohtml", data); err != nil {
 		http.Error(w, err.Error(), 500)

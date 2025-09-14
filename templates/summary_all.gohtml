@@ -18,6 +18,28 @@
     canvas { max-height: 360px; }
     .toolbar { display: grid; gap: .75rem; grid-template-columns: 1fr auto; align-items: end; }
   </style>
+  <script>
+  // Plugin: pon cursor "pointer" se o elemento baixo o rato ten URL asociada
+  const cursorLinkPlugin = {
+    id: 'cursorLinkPlugin',
+    afterEvent(chart, args) {
+      const ev = args.event;
+      const els = chart.getActiveElements();
+      const urls = chart.options.linkUrls || [];
+      const canvas = chart.canvas;
+      let pointer = false;
+
+      if (els && els.length) {
+        const idx = els[0].index;
+        // Se hai URL para esa etiqueta, activamos o cursor
+        if (urls[idx]) pointer = true;
+      }
+      canvas.style.cursor = pointer ? 'pointer' : 'default';
+    }
+  };
+  Chart.register(cursorLinkPlugin);
+  </script>
+
 </head>
 <body>
 <header class="container-fluid nav">
@@ -51,7 +73,7 @@
 
   <div class="grid">
     <section class="card span-12">
-      <h3>1. Número de adxudicacións mensuais (contratos menores)</h3>
+      <h3>1. Número de adxudicacións e importes por mes (contratos menores)</h3>
       <canvas id="chartAdxMensuais"></canvas>
     </section>
 
@@ -69,6 +91,30 @@
       <h3>4. Top 10 adxudicatarios contratos menores</h3>
       <canvas id="chartAdxudicatarios"></canvas>
     </section>
+
+  <section class="card span-12">
+    <h3>Top 20 maiores licitacións (importe)</h3>
+    <canvas id="chartTopImportes"></canvas>
+    <!-- <div id="topLicList" class="muted" style="margin-top:.5rem"></div> -->
+    <script>
+    /*
+        function renderTopList(labels, urls){
+          const el = document.getElementById('topLicList');
+          if (!el) return;
+          let html = '<ol style="margin:0;padding-left:1.25rem">';
+          (labels || []).forEach((lbl, i)=>{
+            const href = (urls || [])[i] || '';
+            if (href) html += `<li><a href="${href}" target="_blank" rel="noopener">${lbl}</a></li>`;
+            else      html += `<li>${lbl}</li>`;
+          });
+          html += '</ol>';
+          el.innerHTML = html;
+        }
+      renderTopList(TopLicLabels, TopLicURLs);
+      */
+    </script>
+  </section>
+
 
     <section class="card span-6">
       <h3>5. Contratos con anexos PDF (global)</h3>
@@ -117,7 +163,10 @@ const chAdxMensuais = new Chart(document.getElementById('chartAdxMensuais'), {
         backgroundColor: 'rgba(255, 99, 132, 0.2)',
         tension: 0.2,
         pointRadius: 2,
-        borderWidth: 2
+        borderWidth: 2,
+        pointHoverRadius: 5,
+        pointHoverBackgroundColor: 'rgba(255, 99, 132, 1)',
+        pointRadius: 3
       }
     ]
   },
@@ -129,7 +178,11 @@ const chAdxMensuais = new Chart(document.getElementById('chartAdxMensuais'), {
       y: {
         position: 'left',
         beginAtZero: true,
-        title: { display: true, text: 'Nº licitacións' }
+        title: { display: true, text: 'Nº licitacións' },
+        ticks: {
+          stepSize: 1,
+          callback: v => Number.isInteger(v) ? v : null
+        }
       },
       y1: {
         position: 'right',
@@ -143,6 +196,52 @@ const chAdxMensuais = new Chart(document.getElementById('chartAdxMensuais'), {
     },
     plugins: { legend: { display: true } }
   }
+});
+
+
+const TopLicLabels  = {{ .TopLicLabels }};
+const TopLicAmounts = {{ .TopLicAmounts }};
+const TopLicURLs    = {{ .TopLicURLs }};
+
+const chTopImportes = new Chart(document.getElementById('chartTopImportes'), {
+  type: 'bar',
+  data: {
+    labels: TopLicLabels,
+    datasets: [{
+      label: 'Importe (€)',
+      data: TopLicAmounts,
+      // feedback visual en hover:
+      hoverBackgroundColor: 'rgba(76, 175, 80, 0.7)',  // verde ao pasar o rato
+      hoverBorderColor: 'rgba(76, 175, 80, 1)',
+      borderWidth: 1
+    }]
+  },
+  options: {
+    linkUrls: TopLicURLs,
+
+    indexAxis: 'y',
+    responsive: true,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: {
+        beginAtZero: true,
+        ticks: {
+          callback: v => new Intl.NumberFormat('es-ES',{style:'currency',currency:'EUR'}).format(v)
+        },
+        title: { display: true, text: 'Importe' }
+      },
+      y: { ticks: { autoSkip: false } }
+    }
+  }
+});
+
+// click nunha barra → abre o expediente nunha pestana nova
+document.getElementById('chartTopImportes').addEventListener('click', (evt)=>{
+  const pts = chTopImportes.getElementsAtEventForMode(evt, 'nearest', {intersect: true}, true);
+  if (!pts.length) return;
+  const idx = pts[0].index;
+  const url = (chTopImportes.options.linkUrls || [])[idx];
+  if (url) window.open(url, '_blank', 'noopener');
 });
 
 
@@ -216,6 +315,12 @@ async function loadAll() {
   chAdxMensuais.data.datasets[0].data = data.adxMesCounts || [];
   chAdxMensuais.data.datasets[1].data = data.adxMesImportes || [];
   chAdxMensuais.update();
+
+  chTopImportes.data.labels = data.topLicLabels || [];
+  chTopImportes.data.datasets[0].data = data.topLicAmounts || [];
+  chTopImportes.update();
+  // refrescar lista textual para poder seleccionar/copiar
+  //renderTopList(data.topLicLabels, data.topLicUrls);
 
 
   // actualizar URL sen recargar

@@ -1,9 +1,11 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 )
@@ -23,11 +25,19 @@ func (s *server) handleAPISummaryAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// acumuladores
 	tiposCount := map[string]int{}
 	tiposImporte := map[string]float64{}
 	adxCount := map[string]int{}
 	adxMensual := map[string]int{}
 	adxMensualImporte := map[string]float64{}
+
+	type topItem struct {
+		Label  string
+		Amount float64
+		URL    string
+	}
+	var topLic []topItem
 
 	var conPDF, total int
 
@@ -126,6 +136,75 @@ func (s *server) handleAPISummaryAll(w http.ResponseWriter, r *http.Request) {
 		var partTot int
 		_ = s.db.QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM %s %s`, baseQ, where), args...).Scan(&partTot)
 		total += partTot
+
+		// query para top10 importes
+		if importeCol != "" {
+			// columnas auxiliares (se non existen, devolvemos cadea baleira para non romper Scan)
+			colOrEmpty := func(name string) string {
+				if name == "" {
+					return "''"
+				}
+				return quoteIdent(name)
+			}
+			expCol := pickFirstColumnName(cols, "Expediente")
+			objCol := pickFirstColumnName(cols, "Obxecto", "Objeto", "Asunto", "Descripcion", "Descripción", "Concepto", "Titulo", "Título")
+			// adxCol xa o detectas antes co teu código
+
+			qTop := fmt.Sprintf(`
+				SELECT
+					%s AS expediente,
+					%s AS obxecto,
+					%s AS adx,
+					%s AS imp
+				FROM %s
+				%s
+				ORDER BY imp DESC
+				LIMIT 20
+    		`,
+				colOrEmpty(expCol),
+				colOrEmpty(objCol),
+				colOrEmpty(adxCol),
+				sqlToRealEuro(quoteIdent(importeCol)),
+				quoteIdent(sel),
+				where,
+			)
+
+			if rows, err := s.db.Query(qTop, args...); err == nil {
+				for rows.Next() {
+					var exp, obj, adj sql.NullString
+					var imp float64
+					if err := rows.Scan(&exp, &obj, &adj, &imp); err == nil {
+						// etiqueta amigábel
+						label := ""
+						if exp.Valid && strings.TrimSpace(exp.String) != "" {
+							label = strings.TrimSpace(exp.String)
+						}
+						if label == "" && obj.Valid && strings.TrimSpace(obj.String) != "" {
+							label = strings.TrimSpace(obj.String)
+						}
+						if label == "" && adj.Valid && strings.TrimSpace(adj.String) != "" {
+							label = strings.TrimSpace(adj.String)
+						}
+						if label == "" {
+							label = sel
+						}
+						if len(label) > 100 {
+							label = label[:100] + "…"
+						}
+
+						// URL: /table/<filesTable OU base>/?q=<expediente>
+						var urlStr string
+						if exp.Valid && strings.TrimSpace(exp.String) != "" {
+							urlStr = "/table/" + sel + "?q=" + url.QueryEscape(strings.TrimSpace(exp.String))
+						}
+
+						topLic = append(topLic, topItem{Label: label, Amount: imp, URL: urlStr})
+					}
+				}
+				rows.Close()
+			}
+		}
+
 	}
 
 	type kvI struct {
@@ -197,6 +276,20 @@ func (s *server) handleAPISummaryAll(w http.ResponseWriter, r *http.Request) {
 		adxMesImportes = append(adxMesImportes, adxMensualImporte[p.K])
 	}
 
+	sort.Slice(topLic, func(i, j int) bool { return topLic[i].Amount > topLic[j].Amount })
+	if len(topLic) > 20 {
+		topLic = topLic[:20]
+	}
+
+	var topLicLabels []string
+	var topLicAmounts []float64
+	var topLicURLs []string
+	for _, it := range topLic {
+		topLicLabels = append(topLicLabels, it.Label)
+		topLicAmounts = append(topLicAmounts, it.Amount)
+		topLicURLs = append(topLicURLs, it.URL)
+	}
+
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"q":           q,
@@ -208,6 +301,9 @@ func (s *server) handleAPISummaryAll(w http.ResponseWriter, r *http.Request) {
 		"adxMesLabels":   adxMesLabels,
 		"adxMesCounts":   adxMesCounts,
 		"adxMesImportes": adxMesImportes,
+		"topLicLabels":   topLicLabels,
+		"topLicAmounts":  topLicAmounts,
+		"topLicUrls":     topLicURLs,
 	})
 }
 
