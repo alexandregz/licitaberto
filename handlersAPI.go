@@ -177,13 +177,13 @@ func (s *server) handleAPISummaryAll(w http.ResponseWriter, r *http.Request) {
 					var exp, obj, adj sql.NullString
 					var imp float64
 					if err := rows.Scan(&exp, &obj, &adj, &imp); err == nil {
-						// etiqueta amigábel
+						// etiqueta: damos prioridade ao Objeto del contrato
 						label := ""
-						if exp.Valid && strings.TrimSpace(exp.String) != "" {
-							label = strings.TrimSpace(exp.String)
-						}
-						if label == "" && obj.Valid && strings.TrimSpace(obj.String) != "" {
+						if obj.Valid && strings.TrimSpace(obj.String) != "" {
 							label = strings.TrimSpace(obj.String)
+						}
+						if label == "" && exp.Valid && strings.TrimSpace(exp.String) != "" {
+							label = strings.TrimSpace(exp.String)
 						}
 						if label == "" && adj.Valid && strings.TrimSpace(adj.String) != "" {
 							label = strings.TrimSpace(adj.String)
@@ -191,8 +191,8 @@ func (s *server) handleAPISummaryAll(w http.ResponseWriter, r *http.Request) {
 						if label == "" {
 							label = sel
 						}
-						if len(label) > 100 {
-							label = label[:100] + "…"
+						if len(label) > 50 {
+							label = label[:50] + "…"
 						}
 
 						// URL: /table/<filesTable OU base>/?q=<expediente>
