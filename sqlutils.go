@@ -46,6 +46,11 @@ func sqlNoAccents(expr string) string {
 	return "LOWER(" + s + ")"
 }
 
+// Converte un campo numérico en formato "12.345,67" a REAL en SQLite
+func sqlToRealEuro(expr string) string {
+	return fmt.Sprintf("CAST(REPLACE(REPLACE(%s, '.', ''), ',', '.') AS REAL)", expr)
+}
+
 // --- Normalización simple ---
 
 func openSQLite(dbPath string) (*sql.DB, error) {

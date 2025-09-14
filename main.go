@@ -26,6 +26,7 @@ package main
 import (
 	"database/sql"
 	"embed"
+	"time"
 
 	"flag"
 	"html/template"
@@ -45,8 +46,6 @@ import (
 var webFS embed.FS
 
 var pdfPath, concello string
-
-// ==== Modo WEB ====
 
 type server struct {
 	db      *sql.DB
@@ -78,28 +77,43 @@ func newServer(db *sql.DB) (*server, error) {
 	return &server{db: db, tpl: tpl, perPage: 25}, nil
 }
 
-func (s *server) routes(addr string) error {
+func (s *server) routes(addr string, debug bool) error {
 	assets, err := fs.Sub(webFS, "webstatic")
 	if err != nil {
 		return err
 	}
 
 	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(assets))))
-	http.HandleFunc("/", s.handleIndex)
-	http.HandleFunc("/table/", s.handleTable)
-	http.HandleFunc("/export/csv", s.handleExportCSV)
-	http.HandleFunc("/export/xlsx", s.handleExportXLSX)
-	http.HandleFunc("/api/table/", s.handleAPITable) // ← API JSON para Instant Search
+	http.HandleFunc("/", withLogging(debug, s.handleIndex))
+	http.HandleFunc("/table/", withLogging(debug, s.handleTable))
+	http.HandleFunc("/export/csv", withLogging(debug, s.handleExportCSV))
+	http.HandleFunc("/export/xlsx", withLogging(debug, s.handleExportXLSX))
+	http.HandleFunc("/api/table/", withLogging(debug, s.handleAPITable)) // ← API JSON para Instant Search
 
 	http.Handle("/pdfs/", http.StripPrefix("/pdfs/", http.FileServer(http.Dir(pdfPath))))
 
-	http.HandleFunc("/summary", s.handleSummary)
-	http.HandleFunc("/api/summary", s.handleAPISummary)
+	http.HandleFunc("/summary", withLogging(debug, s.handleSummary))
+	http.HandleFunc("/api/summary", withLogging(debug, s.handleAPISummary))
+
+	http.HandleFunc("/summary_all", withLogging(debug, s.handleSummaryAll))
+	http.HandleFunc("/api/summary_all", withLogging(debug, s.handleAPISummaryAll))
 
 	log.Printf("Web UI en http://%s", addr)
 	log.Printf("PDFs en %s", http.Dir(pdfPath))
 
 	return http.ListenAndServe(addr, nil)
+}
+
+// middleware para empregar de debug nos handlers
+func withLogging(debug bool, h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if debug {
+			start := time.Now()
+			log.Printf("→ %s %s %s", r.Method, r.URL.Path, r.URL.RawQuery)
+			defer log.Printf("← %s %s (%s)", r.Method, r.URL.Path, time.Since(start))
+		}
+		h(w, r)
+	}
 }
 
 // --
@@ -109,10 +123,17 @@ func main() {
 	// o dbPath tamen indica onde estaran os ficheiros PDF, entendendo que ao utilizar o scrapper
 	//  https://github.com/alexandregz/plataforma_contratacion_estado_scrapper van ter esa estructura:
 	// 	PDF/CONCELHO/TABOA/EXPEDIENTE/
-	dbPath := flag.String("db", "./data.sqlite", "ruta ao ficheiro SQLite")
+	dbPath := flag.String("db", "", "ruta ao ficheiro SQLite")
 	mode := flag.String("mode", "web", "web|tui")
 	addr := flag.String("addr", "127.0.0.1:8080", "enderezo para o modo web")
+
+	debug := flag.Bool("debug", false, "enable debug logging")
+
 	flag.Parse()
+
+	if *dbPath == "" {
+		log.Fatal("Debe especificar a ruta ao ficheiro SQLite con --db")
+	}
 
 	db, err := openSQLite(*dbPath)
 	if err != nil {
@@ -136,7 +157,7 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		if err := srv.routes(*addr); err != nil {
+		if err := srv.routes(*addr, *debug); err != nil {
 			log.Fatal(err)
 		}
 	case "tui":

@@ -1,10 +1,10 @@
-{{ define "summary.gohtml" }}
+{{ define "summary_all.gohtml" }}
 <!doctype html>
 <html lang="gl">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Resumo · {{ .Table }}</title>
+  <title>Resumo global · {{ .concello }}</title>
   <link rel="stylesheet" href="/static/pico.min.css">
   <link rel="stylesheet" href="/static/compact.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -16,67 +16,65 @@
     .span-12{ grid-column: span 12; }
     @media (max-width: 1024px){ .span-6{ grid-column: span 12; } }
     canvas { max-height: 360px; }
-    .toolbar { display: grid; gap: .75rem; grid-template-columns: 1fr 260px auto; align-items: end; }
-    @media (max-width: 840px){ .toolbar { grid-template-columns: 1fr; } }
+    .toolbar { display: grid; gap: .75rem; grid-template-columns: 1fr auto; align-items: end; }
   </style>
 </head>
 <body>
 <header class="container-fluid nav">
   <nav>
-    <ul><li><strong>Gráficas {{ .concello }} por táboa</strong></li></ul>
+    <ul><li><strong>Resumo global {{ .concello }}</strong></li></ul>
     <ul>
       <li><a href="/">Index</a></li>
     </ul>
   </nav>
 </header>
 
+
 <main class="container">
+  <h2>{{ .concello }} · resumo global</h2>
+
   {{ template "partials/menu" . }}
 
-  <form method="get" action="/summary" class="toolbar" role="search">
+
+  <form method="get" action="/summary_all" class="toolbar" role="search">
     <label>
-      <span>Buscar</span>
+      <span>Buscar (tódalas táboas)</span>
       <input type="search" name="q" value="{{ .Q }}" placeholder="ex.: adxudicatario, obxecto, importe..." />
-    </label>
-    <label>
-      <span>Táboa</span>
-      <select name="table">
-        {{ range .Tables }}
-          <option value="{{ . }}" {{ if eq $.Table . }}selected{{ end }}>{{ . }}</option>
-        {{ end }}
-      </select>
     </label>
     <div>
       <button type="submit">Aplicar</button>
-      <a role="button" href="/summary">Limpar</a>
-      <a role="button" class="secondary" href="/table/{{ .Table }}" id="link_ver_listado">Ver listado</a>
+      <a role="button" href="/summary_all">Limpar</a>
     </div>
   </form>
 
-
-    <p><small>{{ if .FilesTable }}anexos en <code id="anexos_en_texto">{{ .FilesTable }}</code></small></p>
-  {{ end }}
+  {{ if .Q }}<p><small>Filtro aplicado: <mark>{{ .Q }}</mark></small></p>{{ end }}
 
   <div class="grid">
+    <section class="card span-12">
+      <h3>1. Número de adxudicacións mensuais (contratos menores)</h3>
+      <canvas id="chartAdxMensuais"></canvas>
+    </section>
+
     <section class="card span-6">
-      <h3>1. Nº de contratos por tipo</h3>
+      <h3>2. Nº de contratos por tipo (todas as táboas)</h3>
       <canvas id="chartTipos"></canvas>
     </section>
 
     <section class="card span-6">
-      <h3>2. Importe total por tipo (€)</h3>
+      <h3>3. Importe total por tipo (€) — global</h3>
       <canvas id="chartImportes"></canvas>
     </section>
 
     <section class="card span-12">
-      <h3>3. Top 10 adxudicatarios por nº de contratos</h3>
+      <h3>4. Top 10 adxudicatarios contratos menores</h3>
       <canvas id="chartAdxudicatarios"></canvas>
     </section>
 
     <section class="card span-6">
-      <h3>4. Contratos con anexos PDF</h3>
+      <h3>5. Contratos con anexos PDF (global)</h3>
       <canvas id="chartAnexos"></canvas>
     </section>
+
   </div>
 </main>
 
@@ -90,7 +88,66 @@ const AdxCounts   = {{ .AdxCounts }};
 const AnexosLabels= {{ .AnexosLabels }};
 const AnexosCounts= {{ .AnexosCounts }};
 
-// crear charts
+const AdxMesLabels   = {{ .AdxMesLabels }};
+const AdxMesCounts   = {{ .AdxMesCounts }};
+const AdxMesImportes = {{ .AdxMesImportes }};
+
+const chAdxMensuais = new Chart(document.getElementById('chartAdxMensuais'), {
+  type: 'bar',
+  data: {
+    labels: AdxMesLabels,
+    datasets: [
+      // Barras: número de licitacións
+      {
+        type: 'bar',
+        label: 'Adxudicacións',
+        data: AdxMesCounts,
+        yAxisID: 'y',
+        backgroundColor: 'rgba(33, 150, 243, 0.6)',     // azul
+        borderColor: 'rgba(33, 150, 243, 1)',
+        borderWidth: 1
+      },
+      // Liña: importe total (€)
+      {
+        type: 'line',
+        label: 'Importe total (€)',
+        data: AdxMesImportes,
+        yAxisID: 'y1',
+        borderColor: 'rgba(255, 99, 132, 1)',           // vermello
+        backgroundColor: 'rgba(255, 99, 132, 0.2)',
+        tension: 0.2,
+        pointRadius: 2,
+        borderWidth: 2
+      }
+    ]
+  },
+  options: {
+    responsive: true,
+    interaction: { mode: 'index', intersect: false },
+    stacked: false,
+    scales: {
+      y: {
+        position: 'left',
+        beginAtZero: true,
+        title: { display: true, text: 'Nº licitacións' }
+      },
+      y1: {
+        position: 'right',
+        beginAtZero: true,
+        grid: { drawOnChartArea: false },
+        ticks: {
+          callback: v => new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' }).format(v)
+        },
+        title: { display: true, text: 'Importe total (€)' }
+      }
+    },
+    plugins: { legend: { display: true } }
+  }
+});
+
+
+
+// Charts iniciais
 const chTipos = new Chart(document.getElementById('chartTipos'), {
   type: 'bar',
   data: { labels: TiposLabels, datasets: [{ label: 'Contratos', data: TiposCounts }] },
@@ -118,24 +175,27 @@ const chAnx = new Chart(document.getElementById('chartAnexos'), {
   options: { responsive: true }
 });
 
-// instant search
+// Instant search (3+ chars) + botón Aplicar
 const form   = document.querySelector('form[role="search"]');
 const qInput = form.querySelector('input[name="q"]');
-const tSel   = form.querySelector('select[name="table"]');
 
 function debounce(fn, ms){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
 
-async function loadSummary() {
+async function loadAll() {
   const q = (qInput.value || "").trim();
-  const table = tSel.value;
-  if (q.length>0 && q.length<3) return; // só dende 3 chars (ou baleiro)
+  if (q.length>0 && q.length<3) return;
 
-  const params = new URLSearchParams({ q, table });
-  const res = await fetch('/api/summary?' + params.toString());
+  const params = new URLSearchParams({ q });
+  const res = await fetch('/api/summary_all?' + params.toString(), { headers: { 'Accept':'application/json' } });
   if (!res.ok) return;
+
+  const ct = res.headers.get('content-type') || '';
+  if (!ct.includes('application/json')) {
+    console.error('Esperaba JSON en /api/summary_all, chegou:', ct);
+    return;
+  }
   const data = await res.json();
 
-  // actualizar charts
   chTipos.data.labels = data.tiposLabels || [];
   chTipos.data.datasets[0].data = data.tiposCounts || [];
   chTipos.update();
@@ -152,28 +212,22 @@ async function loadSummary() {
   chAnx.data.datasets[0].data = data.anexosCounts || [];
   chAnx.update();
 
+  chAdxMensuais.data.labels = data.adxMesLabels || [];
+  chAdxMensuais.data.datasets[0].data = data.adxMesCounts || [];
+  chAdxMensuais.data.datasets[1].data = data.adxMesImportes || [];
+  chAdxMensuais.update();
+
+
   // actualizar URL sen recargar
   const url = new URL(location.href);
   if (q) url.searchParams.set('q', q); else url.searchParams.delete('q');
-  url.searchParams.set('table', table);
   history.replaceState(null, '', url);
 }
 
-const loadDebounced = debounce(loadSummary, 180);
+const loadDebounced = debounce(loadAll, 180);
 
-// impedir recarga co botón "Aplicar"
-form.addEventListener('submit', (e)=>{ e.preventDefault(); loadSummary(); });
-
-// instant search: 3+ chars
+form.addEventListener('submit', (e)=>{ e.preventDefault(); loadAll(); });
 qInput.addEventListener('input', loadDebounced);
-
-// cambio de táboa → refrescar xa
-tSel.addEventListener('change', ()=>{ 
-                                        qInput.value = qInput.value.trim(); 
-                                        document.getElementById('anexos_en_texto').innerText = tSel.value + '_files';
-                                        document.getElementById('link_ver_listado').href = '/table/' + tSel.value; 
-                                        loadSummary(); 
-                                    });
 </script>
 
 </body>

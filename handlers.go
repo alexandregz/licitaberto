@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -438,112 +439,256 @@ func (s *server) handleAPITable(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// /api/summary: devolve os mesmos datos ca handleSummary pero en JSON
-func (s *server) handleAPISummary(w http.ResponseWriter, r *http.Request) {
-	q := strings.TrimSpace(r.URL.Query().Get("q"))
-	sel := strings.TrimSpace(r.URL.Query().Get("table"))
-	if sel == "" {
-		sel = "Alcaldia_contratos_menores"
-	}
-
-	// reutilizamos a lóxica de handleSummary (copiamos o miolo simplificado)
-	cols, err := tableColumns(s.db, sel)
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	where, args := buildWhereLike(cols, q)
-
-	// detección de columnas
-	tipoCol := pickFirstColumnName(cols, "Tipo", "TipoContrato", "Tipo_licitacion", "Tipo_licitación")
-	importeCol := pickFirstColumnName(cols, "Importe", "Importe_con_iva", "Importe_con_IVE", "Importe_sin_iva", "Importe_sen_IVE")
-	adxCol := pickFirstColumnName(cols, "Adxudicatario", "Adjudicatario", "Proveedor", "Contratista", "Empresa")
-	files := findFilesTable(s.db, sel)
-	baseQ := quoteIdent(sel)
-
-	type resp struct {
-		Table        string    `json:"table"`
-		Q            string    `json:"q"`
-		TiposLabels  []string  `json:"tiposLabels"`
-		TiposCounts  []int     `json:"tiposCounts"`
-		ImpLabels    []string  `json:"impLabels"`
-		ImpTotals    []float64 `json:"impTotals"`
-		AdxLabels    []string  `json:"adxLabels"`
-		AdxCounts    []int     `json:"adxCounts"`
-		AnexosLabels []string  `json:"anexosLabels"`
-		AnexosCounts []int     `json:"anexosCounts"`
-	}
-
-	out := resp{Table: sel, Q: q}
-
-	// queries iguais ás de handleSummary...
-	if tipoCol != "" {
-		q1 := fmt.Sprintf(`SELECT COALESCE(NULLIF(TRIM(%s),''),'(Sen tipo)'), COUNT(*) FROM %s %s GROUP BY 1 ORDER BY 2 DESC`,
-			quoteIdent(tipoCol), baseQ, where)
-		rows, err := s.db.Query(q1, args...)
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		for rows.Next() {
-			var k string
-			var c int
-			_ = rows.Scan(&k, &c)
-			out.TiposLabels = append(out.TiposLabels, k)
-			out.TiposCounts = append(out.TiposCounts, c)
-		}
-		rows.Close()
-	}
-	if tipoCol != "" && importeCol != "" {
-		q2 := fmt.Sprintf(`SELECT COALESCE(NULLIF(TRIM(%s),''),'(Sen tipo)'), SUM(CAST(REPLACE(REPLACE(%s,'.',''),',','.') AS REAL))
-			FROM %s %s GROUP BY 1 ORDER BY 2 DESC`, quoteIdent(tipoCol), quoteIdent(importeCol), baseQ, where)
-		rows, err := s.db.Query(q2, args...)
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		for rows.Next() {
-			var k string
-			var v float64
-			_ = rows.Scan(&k, &v)
-			out.ImpLabels = append(out.ImpLabels, k)
-			out.ImpTotals = append(out.ImpTotals, v)
-		}
-		rows.Close()
-	}
-	if adxCol != "" {
-		q3 := fmt.Sprintf(`SELECT COALESCE(NULLIF(TRIM(%s),''),'(Sen adxudicatario)'), COUNT(*) FROM %s %s GROUP BY 1 ORDER BY 2 DESC LIMIT 10`,
-			quoteIdent(adxCol), baseQ, where)
-		rows, err := s.db.Query(q3, args...)
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		for rows.Next() {
-			var k string
-			var c int
-			_ = rows.Scan(&k, &c)
-			out.AdxLabels = append(out.AdxLabels, k)
-			out.AdxCounts = append(out.AdxCounts, c)
-		}
-		rows.Close()
-	}
-	var conPDF, total int
-	if files != "" {
-		q4 := fmt.Sprintf(`SELECT COUNT(DISTINCT m.Expediente) FROM %s m JOIN %s f ON m.Expediente=f.Expediente %s`, baseQ, quoteIdent(files), where)
-		_ = s.db.QueryRow(q4, args...).Scan(&conPDF)
-	}
-	_ = s.db.QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM %s %s`, baseQ, where), args...).Scan(&total)
-	out.AnexosLabels = []string{"Con PDF", "Sen PDF"}
-	out.AnexosCounts = []int{conPDF, total - conPDF}
-
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	_ = json.NewEncoder(w).Encode(out)
-}
-
 func max(a, b int) int {
 	if a > b {
 		return a
 	}
 	return b
+}
+
+// /summary_all: agregados globais sobre todas as táboas base
+func (s *server) handleSummaryAll(w http.ResponseWriter, r *http.Request) {
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+
+	// 1) táboas base (non *_files/_file)
+	bases, err := listBaseTables(s.db)
+	if err != nil || len(bases) == 0 {
+		http.Error(w, "non hai táboas", 500)
+		return
+	}
+
+	// acumuladores
+	tiposCount := map[string]int{}
+	tiposImporte := map[string]float64{}
+	adxCount := map[string]int{}
+	adxMensual := map[string]int{}
+	adxMensualImporte := map[string]float64{}
+
+	var conPDF, total int
+
+	for _, sel := range bases {
+		baseQ := quoteIdent(sel)
+
+		// columnas dispoñibles nesta táboa
+		cols, err := tableColumns(s.db, sel)
+		if err != nil {
+			continue
+		}
+
+		where, args := buildWhereLike(cols, q)
+
+		// detectar columnas desta táboa
+		tipoCol := pickFirstColumnName(cols, "Tipo", "TipoContrato", "Tipo_licitacion", "Tipo_licitación")
+		importeCol := pickFirstColumnName(cols, "Importe", "Importe_con_iva", "Importe_con_IVE", "Importe_sin_iva", "Importe_sen_IVE")
+		adxCol := pickFirstColumnName(cols, "Adxudicatario", "Adjudicatario", "Proveedor", "Contratista", "Empresa")
+
+		// nº por Tipo
+		if tipoCol != "" {
+			q1 := fmt.Sprintf(`
+				SELECT COALESCE(NULLIF(TRIM(%s),''),'(Sen tipo)') AS k, COUNT(*) AS c
+				FROM %s %s
+				GROUP BY k
+			`, quoteIdent(tipoCol), baseQ, where)
+			rows, err := s.db.Query(q1, args...)
+			if err == nil {
+				for rows.Next() {
+					var k string
+					var c int
+					_ = rows.Scan(&k, &c)
+					tiposCount[k] += c
+				}
+				rows.Close()
+			}
+		}
+
+		// importe total por Tipo
+		if tipoCol != "" && importeCol != "" {
+			q2 := fmt.Sprintf(`
+				SELECT COALESCE(NULLIF(TRIM(%s),''),'(Sen tipo)') AS k,
+				       SUM(CAST(REPLACE(REPLACE(%s,'.',''),',','.') AS REAL)) AS total
+				FROM %s %s
+				GROUP BY k
+			`, quoteIdent(tipoCol), quoteIdent(importeCol), baseQ, where)
+			rows, err := s.db.Query(q2, args...)
+			if err == nil {
+				for rows.Next() {
+					var k string
+					var v float64
+					_ = rows.Scan(&k, &v)
+					tiposImporte[k] += v
+				}
+				rows.Close()
+			}
+		}
+
+		// top adxudicatarios (acumulamos; o top farase ao final)
+		if adxCol != "" {
+			q3 := fmt.Sprintf(`
+				SELECT COALESCE(NULLIF(TRIM(%s),''),'(Sen adxudicatario)') AS k, COUNT(*) AS c
+				FROM %s %s
+				GROUP BY k
+			`, quoteIdent(adxCol), baseQ, where)
+			rows, err := s.db.Query(q3, args...)
+			if err == nil {
+				for rows.Next() {
+					var k string
+					var c int
+					_ = rows.Scan(&k, &c)
+					adxCount[k] += c
+				}
+				rows.Close()
+			}
+		}
+
+		// Só para *_contratos_menores e cando hai columna de importe
+		if strings.HasSuffix(strings.ToLower(sel), "_contratos_menores") && importeCol != "" {
+			q5 := fmt.Sprintf(`
+				SELECT
+					SUBSTR(Estado, -7, 2) AS mes_publicacion,
+					SUBSTR(Estado, -4, 4) AS ano_publicacion,
+					COUNT(*) AS total,
+					SUM(%s) AS total_importe
+				FROM %s
+				%s
+				GROUP BY ano_publicacion, mes_publicacion
+				ORDER BY ano_publicacion, mes_publicacion
+			`, sqlToRealEuro(quoteIdent(importeCol)), quoteIdent(sel), where)
+
+			if rows, err := s.db.Query(q5, args...); err == nil {
+				defer rows.Close()
+				for rows.Next() {
+					var mes, ano string
+					var total int
+					var totalImporte float64
+					if err := rows.Scan(&mes, &ano, &total, &totalImporte); err == nil {
+						key := ano + "-" + mes // YYYY-MM
+						adxMensual[key] += total
+						adxMensualImporte[key] += totalImporte
+					}
+				}
+			}
+		}
+
+		// con/total PDF para esta táboa
+		files := findFilesTable(s.db, sel)
+		if files != "" {
+			q4 := fmt.Sprintf(`
+				SELECT COUNT(DISTINCT m.Expediente)
+				FROM %s m
+				JOIN %s f ON m.Expediente = f.Expediente
+				%s
+			`, baseQ, quoteIdent(files), where)
+			var part int
+			_ = s.db.QueryRow(q4, args...).Scan(&part)
+			conPDF += part
+		}
+		var partTot int
+		_ = s.db.QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM %s %s`, baseQ, where), args...).Scan(&partTot)
+		total += partTot
+	}
+
+	// pasar mapas a arrays ordenados
+	type kvI struct {
+		K string
+		V int
+	}
+	type kvF struct {
+		K string
+		V float64
+	}
+
+	// tiposCount -> desc por V
+	tiposArr := make([]kvI, 0, len(tiposCount))
+	for k, v := range tiposCount {
+		tiposArr = append(tiposArr, kvI{k, v})
+	}
+	sort.Slice(tiposArr, func(i, j int) bool { return tiposArr[i].V > tiposArr[j].V })
+	var tiposLabels []string
+	var tiposCounts []int
+	for _, p := range tiposArr {
+		tiposLabels = append(tiposLabels, p.K)
+		tiposCounts = append(tiposCounts, p.V)
+	}
+
+	// tiposImporte -> desc por V
+	impArr := make([]kvF, 0, len(tiposImporte))
+	for k, v := range tiposImporte {
+		impArr = append(impArr, kvF{k, v})
+	}
+	sort.Slice(impArr, func(i, j int) bool { return impArr[i].V > impArr[j].V })
+	var impLabels []string
+	var impTotals []float64
+	for _, p := range impArr {
+		impLabels = append(impLabels, p.K)
+		impTotals = append(impTotals, p.V)
+	}
+
+	// adxCount -> top 10 desc
+	adxArr := make([]kvI, 0, len(adxCount))
+	for k, v := range adxCount {
+		adxArr = append(adxArr, kvI{k, v})
+	}
+	sort.Slice(adxArr, func(i, j int) bool { return adxArr[i].V > adxArr[j].V })
+	if len(adxArr) > 10 {
+		adxArr = adxArr[:10]
+	}
+	var adxLabels []string
+	var adxCounts []int
+	for _, p := range adxArr {
+		adxLabels = append(adxLabels, p.K)
+		adxCounts = append(adxCounts, p.V)
+	}
+
+	// JSON seguro para template
+	type js = template.JS
+	lblTipos, _ := json.Marshal(tiposLabels)
+	cntTipos, _ := json.Marshal(tiposCounts)
+	lblImp, _ := json.Marshal(impLabels)
+	valImp, _ := json.Marshal(impTotals)
+	lblAdx, _ := json.Marshal(adxLabels)
+	cntAdx, _ := json.Marshal(adxCounts)
+	lblAnx, _ := json.Marshal([]string{"Con PDF", "Sen PDF"})
+	cntAnx, _ := json.Marshal([]int{conPDF, total - conPDF})
+
+	mArr := make([]struct {
+		K string
+		V int
+	}, 0, len(adxMensual))
+	for k, v := range adxMensual {
+		mArr = append(mArr, struct {
+			K string
+			V int
+		}{k, v})
+	}
+	sort.Slice(mArr, func(i, j int) bool { return mArr[i].K < mArr[j].K })
+
+	var adxMesLabels []string
+	var adxMesCounts []int
+	var adxMesImportes []float64
+	for _, p := range mArr {
+		adxMesLabels = append(adxMesLabels, p.K)
+		adxMesCounts = append(adxMesCounts, p.V)
+		adxMesImportes = append(adxMesImportes, adxMensualImporte[p.K])
+	}
+
+	// serializar a JSON para o template
+	lblMes, _ := json.Marshal(adxMesLabels)
+	cntMes, _ := json.Marshal(adxMesCounts)
+	impMes, _ := json.Marshal(adxMesImportes)
+
+	data := map[string]any{
+		"Q": q, "Tables": bases,
+		"TiposLabels": js(lblTipos), "TiposCounts": js(cntTipos),
+		"ImpLabels": js(lblImp), "ImpTotals": js(valImp),
+		"AdxLabels": js(lblAdx), "AdxCounts": js(cntAdx),
+		"AnexosLabels": js(lblAnx), "AnexosCounts": js(cntAnx),
+		"concello":       concello,
+		"AdxMesLabels":   template.JS(lblMes),
+		"AdxMesCounts":   template.JS(cntMes),
+		"AdxMesImportes": template.JS(impMes),
+	}
+	if err := s.tpl.ExecuteTemplate(w, "summary_all.gohtml", data); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
 }
