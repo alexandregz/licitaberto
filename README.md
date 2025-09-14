@@ -59,3 +59,7 @@ ToDo
 ![Exemplo de táboa de ficheiros](imaxes/005.png)
 
 ![sumario con gráficas](imaxes/006.png)
+
+![Sumario por meses con num expedientes e importes totais](imaxes/007.png)
+
+![Top 20 expedientes por importe](imaxes/008.png)
