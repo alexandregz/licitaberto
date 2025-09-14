@@ -470,6 +470,7 @@ func (s *server) handleSummaryAll(w http.ResponseWriter, r *http.Request) {
 		Label  string
 		Amount float64
 		URL    string
+		Object string
 	}
 	var topLic []topItem
 
@@ -605,8 +606,10 @@ func (s *server) handleSummaryAll(w http.ResponseWriter, r *http.Request) {
 				return quoteIdent(name)
 			}
 			expCol := pickFirstColumnName(cols, "Expediente")
-			objCol := pickFirstColumnName(cols, "Obxecto", "Objeto", "Asunto", "Descripcion", "Descripción", "Concepto", "Titulo", "Título")
-			// adxCol xa o detectas antes co teu código
+			objCol := pickFirstColumnName(cols, "Objeto_del_contrato", "Objeto_del_Contrato", "ObjetoContrato", "Obxecto", "Objeto", "Asunto",
+				"Descripcion", "Descripción",
+				"Concepto", "Titulo", "Título",
+			)
 
 			qTop := fmt.Sprintf(`
 					SELECT
@@ -656,7 +659,7 @@ func (s *server) handleSummaryAll(w http.ResponseWriter, r *http.Request) {
 							urlStr = "/table/" + sel + "?q=" + url.QueryEscape(strings.TrimSpace(exp.String))
 						}
 
-						topLic = append(topLic, topItem{Label: label, Amount: imp, URL: urlStr})
+						topLic = append(topLic, topItem{Label: label, Amount: imp, URL: urlStr, Object: strings.TrimSpace(obj.String)})
 					}
 				}
 				rows.Close()
@@ -762,15 +765,18 @@ func (s *server) handleSummaryAll(w http.ResponseWriter, r *http.Request) {
 	var topLicLabels []string
 	var topLicAmounts []float64
 	var topLicURLs []string
+	var topLicObjects []string
 	for _, it := range topLic {
 		topLicLabels = append(topLicLabels, it.Label)
 		topLicAmounts = append(topLicAmounts, it.Amount)
 		topLicURLs = append(topLicURLs, it.URL)
+		topLicObjects = append(topLicObjects, it.Object)
 	}
 
 	lblTop, _ := json.Marshal(topLicLabels)
 	amtTop, _ := json.Marshal(topLicAmounts)
 	urlTop, _ := json.Marshal(topLicURLs)
+	objTop, _ := json.Marshal(topLicObjects)
 
 	data := map[string]any{
 		"Q": q, "Tables": bases,
@@ -785,6 +791,7 @@ func (s *server) handleSummaryAll(w http.ResponseWriter, r *http.Request) {
 		"TopLicLabels":   template.JS(lblTop),
 		"TopLicAmounts":  template.JS(amtTop),
 		"TopLicURLs":     template.JS(urlTop),
+		"TopLicObjects":  template.JS(objTop),
 	}
 	if err := s.tpl.ExecuteTemplate(w, "summary_all.gohtml", data); err != nil {
 		http.Error(w, err.Error(), 500)

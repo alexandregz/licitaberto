@@ -36,6 +36,7 @@ func (s *server) handleAPISummaryAll(w http.ResponseWriter, r *http.Request) {
 		Label  string
 		Amount float64
 		URL    string
+		Object string
 	}
 	var topLic []topItem
 
@@ -147,8 +148,10 @@ func (s *server) handleAPISummaryAll(w http.ResponseWriter, r *http.Request) {
 				return quoteIdent(name)
 			}
 			expCol := pickFirstColumnName(cols, "Expediente")
-			objCol := pickFirstColumnName(cols, "Obxecto", "Objeto", "Asunto", "Descripcion", "Descripción", "Concepto", "Titulo", "Título")
-			// adxCol xa o detectas antes co teu código
+			objCol := pickFirstColumnName(cols, "Objeto_del_contrato", "Objeto_del_Contrato", "ObjetoContrato", "Obxecto", "Objeto", "Asunto",
+				"Descripcion", "Descripción",
+				"Concepto", "Titulo", "Título",
+			)
 
 			qTop := fmt.Sprintf(`
 				SELECT
@@ -198,7 +201,7 @@ func (s *server) handleAPISummaryAll(w http.ResponseWriter, r *http.Request) {
 							urlStr = "/table/" + sel + "?q=" + url.QueryEscape(strings.TrimSpace(exp.String))
 						}
 
-						topLic = append(topLic, topItem{Label: label, Amount: imp, URL: urlStr})
+						topLic = append(topLic, topItem{Label: label, Amount: imp, URL: urlStr, Object: strings.TrimSpace(obj.String)})
 					}
 				}
 				rows.Close()
@@ -284,10 +287,12 @@ func (s *server) handleAPISummaryAll(w http.ResponseWriter, r *http.Request) {
 	var topLicLabels []string
 	var topLicAmounts []float64
 	var topLicURLs []string
+	var topLicObjects []string
 	for _, it := range topLic {
 		topLicLabels = append(topLicLabels, it.Label)
 		topLicAmounts = append(topLicAmounts, it.Amount)
 		topLicURLs = append(topLicURLs, it.URL)
+		topLicObjects = append(topLicObjects, it.Object)
 	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -304,6 +309,7 @@ func (s *server) handleAPISummaryAll(w http.ResponseWriter, r *http.Request) {
 		"topLicLabels":   topLicLabels,
 		"topLicAmounts":  topLicAmounts,
 		"topLicUrls":     topLicURLs,
+		"topLicObjects":  topLicObjects,
 	})
 }
 
