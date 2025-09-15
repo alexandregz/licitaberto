@@ -97,19 +97,41 @@ func (s *server) handleAPISummaryAll(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Só para *_contratos_menores e cando hai columna de importe
-		if strings.HasSuffix(strings.ToLower(sel), "_contratos_menores") && importeCol != "" {
+		lowSel := strings.ToLower(sel)
+
+		// totais importes e num. licitacións agrupadas por mes
+		if !strings.HasSuffix(lowSel, "_files") && importeCol != "" {
+			lowSel := strings.ToLower(sel)
+
+			// columna que se emprega para recolher a data: Estado en _contratos_menores e Fechas en _licitacions.
+			// Em ámbolos casos os últimos caracteres son "DD/MM/YYYY"
+			var dateCol string
+			switch {
+			case strings.HasSuffix(lowSel, "_contratos_menores"):
+				dateCol = "Estado"
+			case strings.HasSuffix(lowSel, "_licitacions"):
+				dateCol = "Fechas"
+			default:
+				dateCol = "" // non se aplica
+			}
+
 			q5 := fmt.Sprintf(`
-				SELECT
-					SUBSTR(Estado, -7, 2) AS mes_publicacion,
-					SUBSTR(Estado, -4, 4) AS ano_publicacion,
-					COUNT(*) AS total,
-					SUM(%s) AS total_importe
-				FROM %s
-				%s
-				GROUP BY ano_publicacion, mes_publicacion
-				ORDER BY ano_publicacion, mes_publicacion
-			`, sqlToRealEuro(quoteIdent(importeCol)), quoteIdent(sel), where)
+					SELECT
+						SUBSTR(%[1]s, -7, 2) AS mes_publicacion,
+						SUBSTR(%[1]s, -4, 4) AS ano_publicacion,
+						COUNT(*) AS total,
+						SUM(%[2]s) AS total_importe
+					FROM %[3]s
+					%[4]s
+					GROUP BY ano_publicacion, mes_publicacion
+					ORDER BY ano_publicacion, mes_publicacion
+				`,
+				dateCol,
+				sqlToRealEuro(quoteIdent(importeCol)),
+				sel,
+				where,
+			)
+			// log.Printf("q5: %s\n", q5)
 
 			if rows, err := s.db.Query(q5, args...); err == nil {
 				defer rows.Close()
@@ -347,6 +369,17 @@ func (s *server) handleAPISummary(w http.ResponseWriter, r *http.Request) {
 		AdxCounts    []int     `json:"adxCounts"`
 		AnexosLabels []string  `json:"anexosLabels"`
 		AnexosCounts []int     `json:"anexosCounts"`
+
+		// Top 20 por importe
+		TopLicLabels  []string  `json:"topLicLabels"`
+		TopLicAmounts []float64 `json:"topLicAmounts"`
+		TopLicUrls    []string  `json:"topLicUrls"`
+		TopLicObjects []string  `json:"topLicObjects"`
+
+		// Mes a mes: conta e importes
+		AdxMesLabels   []string  `json:"adxMesLabels"`
+		AdxMesCounts   []int     `json:"adxMesCounts"`
+		AdxMesImportes []float64 `json:"adxMesImportes"`
 	}
 
 	out := resp{Table: sel, Q: q}
@@ -408,9 +441,142 @@ func (s *server) handleAPISummary(w http.ResponseWriter, r *http.Request) {
 		q4 := fmt.Sprintf(`SELECT COUNT(DISTINCT m.Expediente) FROM %s m JOIN %s f ON m.Expediente=f.Expediente %s`, baseQ, quoteIdent(files), where)
 		_ = s.db.QueryRow(q4, args...).Scan(&conPDF)
 	}
+
+	// Nº de adxudicacións e importes por mes (API)
+	if importeCol != "" {
+		lowSel := strings.ToLower(sel)
+		var dateCol string
+		switch {
+		case strings.HasSuffix(lowSel, "_contratos_menores"):
+			dateCol = "Estado"
+		case strings.HasSuffix(lowSel, "_licitacions"):
+			dateCol = "Fechas"
+		}
+		if dateCol != "" {
+			q5 := fmt.Sprintf(`
+				SELECT
+					SUBSTR(%[1]s, -7, 2) AS mes_publicacion,
+					SUBSTR(%[1]s, -4, 4) AS ano_publicacion,
+					COUNT(*) AS total,
+					SUM(%[2]s) AS total_importe
+				FROM %[3]s
+				%[4]s
+				GROUP BY ano_publicacion, mes_publicacion
+				ORDER BY ano_publicacion, mes_publicacion
+			`,
+				dateCol,
+				sqlToRealEuro(quoteIdent(importeCol)),
+				baseQ,
+				where,
+			)
+			if rows, err := s.db.Query(q5, args...); err == nil {
+				defer rows.Close()
+				type pair struct {
+					K string
+					C int
+					I float64
+				}
+				tmp := []pair{}
+				for rows.Next() {
+					var mes, ano string
+					var c int
+					var imp float64
+					if err := rows.Scan(&mes, &ano, &c, &imp); err == nil {
+						tmp = append(tmp, pair{K: ano + "-" + mes, C: c, I: imp})
+					}
+				}
+				sort.Slice(tmp, func(i, j int) bool { return tmp[i].K < tmp[j].K })
+				for _, p := range tmp {
+					out.AdxMesLabels = append(out.AdxMesLabels, p.K)
+					out.AdxMesCounts = append(out.AdxMesCounts, p.C)
+					out.AdxMesImportes = append(out.AdxMesImportes, p.I)
+				}
+			}
+		}
+	}
+
+	// Top 20 por importe (para API)
+	var topLicLabels []string
+	var topLicAmounts []float64
+	var topLicUrls []string
+	var topLicObjects []string
+
+	if importeCol != "" {
+		colOrEmpty := func(name string) string {
+			if name == "" {
+				return "''"
+			}
+			return quoteIdent(name)
+		}
+		expCol := pickFirstColumnName(cols, "Expediente")
+		objCol := pickFirstColumnName(
+			cols,
+			"Objeto_del_contrato", "Objeto_del_Contrato", "ObjetoContrato",
+			"Obxecto", "Objeto", "Asunto",
+			"Descripcion", "Descripción",
+			"Concepto", "Titulo", "Título",
+		)
+		qTop := fmt.Sprintf(`
+				SELECT
+					%[1]s AS expediente,
+					%[2]s AS obxecto,
+					%[3]s AS adx,
+					%[4]s AS imp
+				FROM %[5]s
+				%[6]s
+				ORDER BY imp DESC
+				LIMIT 20
+			`,
+			colOrEmpty(expCol),
+			colOrEmpty(objCol),
+			colOrEmpty(adxCol),
+			sqlToRealEuro(quoteIdent(importeCol)),
+			baseQ,
+			where,
+		)
+		if rows, err := s.db.Query(qTop, args...); err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var exp, obj, adj sql.NullString
+				var imp float64
+				if err := rows.Scan(&exp, &obj, &adj, &imp); err == nil {
+					label := strings.TrimSpace(obj.String)
+					if label == "" && exp.Valid {
+						label = strings.TrimSpace(exp.String)
+					}
+					if label == "" && adj.Valid {
+						label = strings.TrimSpace(adj.String)
+					}
+					if label == "" {
+						label = sel
+					}
+					if len(label) > 50 {
+						label = label[:50] + "…"
+					}
+
+					//
+					var urlStr string
+					if exp.Valid && strings.TrimSpace(exp.String) != "" {
+						urlStr = "/table/" + sel + "?q=" + url.QueryEscape(strings.TrimSpace(exp.String))
+					}
+
+					topLicLabels = append(topLicLabels, label)
+					topLicAmounts = append(topLicAmounts, imp)
+					topLicUrls = append(topLicUrls, urlStr)
+					topLicObjects = append(topLicObjects, strings.TrimSpace(obj.String))
+				}
+			}
+		}
+	}
+
 	_ = s.db.QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM %s %s`, baseQ, where), args...).Scan(&total)
 	out.AnexosLabels = []string{"Con PDF", "Sen PDF"}
 	out.AnexosCounts = []int{conPDF, total - conPDF}
+
+	out.TopLicLabels = topLicLabels
+	out.TopLicAmounts = topLicAmounts
+	out.TopLicUrls = topLicUrls
+	out.TopLicObjects = topLicObjects
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_ = json.NewEncoder(w).Encode(out)

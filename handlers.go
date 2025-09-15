@@ -343,6 +343,149 @@ func (s *server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	}
 	senPDF := total - conPDF
 
+	// === Top 20 maiores licitacións por importe (para a táboa sel) ===
+	var topLicLabels []string
+	var topLicAmounts []float64
+	var topLicURLs []string
+	var topLicObjects []string
+
+	if importeCol != "" {
+		// columnas auxiliares
+		colOrEmpty := func(name string) string {
+			if name == "" {
+				return "''"
+			}
+			return quoteIdent(name)
+		}
+		expCol := pickFirstColumnName(cols, "Expediente")
+		objCol := pickFirstColumnName(
+			cols,
+			"Objeto_del_contrato", "Objeto_del_Contrato", "ObjetoContrato",
+			"Obxecto", "Objeto", "Asunto",
+			"Descripcion", "Descripción",
+			"Concepto", "Titulo", "Título",
+		)
+
+		qTop := fmt.Sprintf(`
+		SELECT
+			%[1]s AS expediente,
+			%[2]s AS obxecto,
+			%[3]s AS adx,
+			%[4]s AS imp
+		FROM %[5]s
+		%[6]s
+		ORDER BY imp DESC
+		LIMIT 20
+	`,
+			colOrEmpty(expCol),
+			colOrEmpty(objCol),
+			colOrEmpty(adxCol),
+			sqlToRealEuro(quoteIdent(importeCol)),
+			baseQ,
+			where,
+		)
+
+		if rows, err := s.db.Query(qTop, args...); err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var exp, obj, adj sql.NullString
+				var imp float64
+				if err := rows.Scan(&exp, &obj, &adj, &imp); err == nil {
+					// etiqueta: Obxecto do contrato (fallback a expediente/adxudicatario/táboa)
+					label := strings.TrimSpace(obj.String)
+					if label == "" && exp.Valid {
+						label = strings.TrimSpace(exp.String)
+					}
+					if label == "" && adj.Valid {
+						label = strings.TrimSpace(adj.String)
+					}
+					if label == "" {
+						label = sel
+					}
+					if len(label) > 50 {
+						label = label[:50] + "…"
+					}
+
+					// URL: /table/<filesTable OU base>/?q=<expediente>
+					var urlStr string
+					if exp.Valid && strings.TrimSpace(exp.String) != "" {
+						urlStr = "/table/" + sel + "?q=" + url.QueryEscape(strings.TrimSpace(exp.String))
+					}
+
+					topLicLabels = append(topLicLabels, label)
+					topLicAmounts = append(topLicAmounts, imp)
+					topLicURLs = append(topLicURLs, urlStr)
+					topLicObjects = append(topLicObjects, strings.TrimSpace(obj.String))
+				}
+			}
+		}
+	}
+
+	// === Nº de adxudicacións e importe total por mes (para a táboa sel) ===
+	var adxMesLabels []string
+	var adxMesCounts []int
+	var adxMesImportes []float64
+
+	if importeCol != "" {
+		lowSel := strings.ToLower(sel)
+
+		// elixir columna de data segundo a táboa:
+		// - *_contratos_menores → Estado
+		// - *_licitacions      → Fechas
+		var dateCol string
+		switch {
+		case strings.HasSuffix(lowSel, "_contratos_menores"):
+			dateCol = "Estado"
+		case strings.HasSuffix(lowSel, "_licitacions"):
+			dateCol = "Fechas"
+		default:
+			dateCol = ""
+		}
+
+		if dateCol != "" {
+			q5 := fmt.Sprintf(`
+					SELECT
+						SUBSTR(%[1]s, -7, 2) AS mes_publicacion,
+						SUBSTR(%[1]s, -4, 4) AS ano_publicacion,
+						COUNT(*) AS total,
+						SUM(%[2]s) AS total_importe
+					FROM %[3]s
+					%[4]s
+					GROUP BY ano_publicacion, mes_publicacion
+					ORDER BY ano_publicacion, mes_publicacion
+				`,
+				dateCol,
+				sqlToRealEuro(quoteIdent(importeCol)),
+				baseQ,
+				where,
+			)
+
+			if rows, err := s.db.Query(q5, args...); err == nil {
+				defer rows.Close()
+				type pair struct {
+					K string
+					C int
+					I float64
+				}
+				tmp := []pair{}
+				for rows.Next() {
+					var mes, ano string
+					var total int
+					var totalImp float64
+					if err := rows.Scan(&mes, &ano, &total, &totalImp); err == nil {
+						tmp = append(tmp, pair{K: ano + "-" + mes, C: total, I: totalImp})
+					}
+				}
+				sort.Slice(tmp, func(i, j int) bool { return tmp[i].K < tmp[j].K })
+				for _, p := range tmp {
+					adxMesLabels = append(adxMesLabels, p.K)
+					adxMesCounts = append(adxMesCounts, p.C)
+					adxMesImportes = append(adxMesImportes, p.I)
+				}
+			}
+		}
+	}
+
 	// serializar para o template
 	type js = template.JS
 	lblTipos, _ := json.Marshal(tiposLabels)
@@ -354,13 +497,29 @@ func (s *server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	lblAnx, _ := json.Marshal([]string{"Con PDF", "Sen PDF"})
 	cntAnx, _ := json.Marshal([]int{conPDF, senPDF})
 
+	lblTop, _ := json.Marshal(topLicLabels)
+	amtTop, _ := json.Marshal(topLicAmounts)
+	urlTop, _ := json.Marshal(topLicURLs)
+	objTop, _ := json.Marshal(topLicObjects)
+
+	lblMes, _ := json.Marshal(adxMesLabels)
+	cntMes, _ := json.Marshal(adxMesCounts)
+	impMes, _ := json.Marshal(adxMesImportes)
+
 	data := map[string]any{
 		"Q": q, "Table": sel, "Tables": bases, "FilesTable": files,
 		"TiposLabels": js(lblTipos), "TiposCounts": js(cntTipos),
 		"ImpLabels": js(lblImp), "ImpTotals": js(valImp),
 		"AdxLabels": js(lblAdx), "AdxCounts": js(cntAdx),
 		"AnexosLabels": js(lblAnx), "AnexosCounts": js(cntAnx),
-		"concello": concello,
+		"concello":       concello,
+		"TopLicLabels":   template.JS(lblTop),
+		"TopLicAmounts":  template.JS(amtTop),
+		"TopLicURLs":     template.JS(urlTop),
+		"TopLicObjects":  template.JS(objTop),
+		"AdxMesLabels":   template.JS(lblMes),
+		"AdxMesCounts":   template.JS(cntMes),
+		"AdxMesImportes": template.JS(impMes),
 	}
 	if err := s.tpl.ExecuteTemplate(w, "summary.gohtml", data); err != nil {
 		http.Error(w, err.Error(), 500)
@@ -550,19 +709,41 @@ func (s *server) handleSummaryAll(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Só para *_contratos_menores e cando hai columna de importe
-		if strings.HasSuffix(strings.ToLower(sel), "_contratos_menores") && importeCol != "" {
+		lowSel := strings.ToLower(sel)
+
+		// totais importes e num. licitacións agrupadas por mes
+		if !strings.HasSuffix(lowSel, "_files") && importeCol != "" {
+			lowSel := strings.ToLower(sel)
+
+			// columna que se emprega para recolher a data: Estado en _contratos_menores e Fechas en _licitacions.
+			// Em ámbolos casos os últimos caracteres son "DD/MM/YYYY"
+			var dateCol string
+			switch {
+			case strings.HasSuffix(lowSel, "_contratos_menores"):
+				dateCol = "Estado"
+			case strings.HasSuffix(lowSel, "_licitacions"):
+				dateCol = "Fechas"
+			default:
+				dateCol = "" // non se aplica
+			}
+
 			q5 := fmt.Sprintf(`
-				SELECT
-					SUBSTR(Estado, -7, 2) AS mes_publicacion,
-					SUBSTR(Estado, -4, 4) AS ano_publicacion,
-					COUNT(*) AS total,
-					SUM(%s) AS total_importe
-				FROM %s
-				%s
-				GROUP BY ano_publicacion, mes_publicacion
-				ORDER BY ano_publicacion, mes_publicacion
-			`, sqlToRealEuro(quoteIdent(importeCol)), quoteIdent(sel), where)
+					SELECT
+						SUBSTR(%[1]s, -7, 2) AS mes_publicacion,
+						SUBSTR(%[1]s, -4, 4) AS ano_publicacion,
+						COUNT(*) AS total,
+						SUM(%[2]s) AS total_importe
+					FROM %[3]s
+					%[4]s
+					GROUP BY ano_publicacion, mes_publicacion
+					ORDER BY ano_publicacion, mes_publicacion
+				`,
+				dateCol,
+				sqlToRealEuro(quoteIdent(importeCol)),
+				sel,
+				where,
+			)
+			// log.Printf("q5: %s\n", q5)
 
 			if rows, err := s.db.Query(q5, args...); err == nil {
 				defer rows.Close()
@@ -596,7 +777,7 @@ func (s *server) handleSummaryAll(w http.ResponseWriter, r *http.Request) {
 		_ = s.db.QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM %s %s`, baseQ, where), args...).Scan(&partTot)
 		total += partTot
 
-		// query para top10 importes
+		// query para top20 importes
 		if importeCol != "" {
 			// columnas auxiliares (se non existen, devolvemos cadea baleira para non romper Scan)
 			colOrEmpty := func(name string) string {
