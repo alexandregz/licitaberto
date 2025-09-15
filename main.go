@@ -141,6 +141,11 @@ func main() {
 	}
 	defer db.Close()
 
+	// rexistro de funcións, polo de agora só "unaccent_lower"
+	if err := registerSQLiteFuncs(db); err != nil {
+		log.Printf("WARN: non se puideron rexistrar funcs SQLite: %v", err)
+	}
+
 	// path fisico a PDFs. Hai que reemprazar "TABOA/EXPEDIENTE/" polo que toque "on the fly"
 	pdfPath = filepath.Dir(*dbPath) + "/PDF" + stripExt(strings.TrimPrefix(*dbPath, filepath.Dir(*dbPath)))
 	concello = strings.Replace(stripExt(strings.TrimPrefix(*dbPath, filepath.Dir(*dbPath))), "/", "", 1)

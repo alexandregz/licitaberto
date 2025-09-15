@@ -41,7 +41,7 @@ func (s *server) handleTable(w http.ResponseWriter, r *http.Request) {
 	dir := strings.ToUpper(r.URL.Query().Get("dir")) == "DESC"
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	chartBy := r.URL.Query().Get("chartBy")
-	where, args := buildWhereLike(cols, q)
+	where, args := buildWhereLike(ColNames(cols), q)
 	total, err := countRows(s.db, name, where, args)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
@@ -109,7 +109,7 @@ func (s *server) handleExportCSV(w http.ResponseWriter, r *http.Request) {
 	qParam := r.URL.Query().Get("q")
 	order := r.URL.Query().Get("order")
 	dir := strings.ToUpper(r.URL.Query().Get("dir")) == "DESC"
-	where, args := buildWhereLike(cols, qParam)
+	where, args := buildWhereLike(ColNames(cols), qParam)
 
 	// export todo sen páxina
 	rows, err := fetchPage(s.db, name, cols, where, order, dir, 1, 1_000_000, args)
@@ -156,7 +156,7 @@ func (s *server) handleExportXLSX(w http.ResponseWriter, r *http.Request) {
 	qParam := r.URL.Query().Get("q")
 	order := r.URL.Query().Get("order")
 	dir := strings.ToUpper(r.URL.Query().Get("dir")) == "DESC"
-	where, args := buildWhereLike(cols, qParam)
+	where, args := buildWhereLike(ColNames(cols), qParam)
 	rows, err := fetchPage(s.db, name, cols, where, order, dir, 1, 1_000_000, args)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
@@ -223,7 +223,7 @@ func (s *server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	where, args := buildWhereLike(cols, q)
+	where, args := buildWhereLike(ColNames(cols), q)
 
 	// detectar nomes de columnas clave
 	tipoCol := pickFirstColumnName(cols, "Tipo", "TipoContrato", "Tipo_licitacion", "Tipo_licitación")
@@ -550,7 +550,7 @@ func (s *server) handleAPITable(w http.ResponseWriter, r *http.Request) {
 	}
 	chartBy := r.URL.Query().Get("chartBy")
 
-	where, args := buildWhereLike(cols, q)
+	where, args := buildWhereLike(ColNames(cols), q)
 	total, err := countRows(s.db, name, where, args)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
@@ -625,6 +625,10 @@ func (s *server) handleSummaryAll(w http.ResponseWriter, r *http.Request) {
 	adxMensual := map[string]int{}
 	adxMensualImporte := map[string]float64{}
 
+	// para barras apiladas: conteos por táboa e por mes
+	countsByMonth := map[string]map[string]int{} // table -> month(YYYY-MM) -> count
+	var stackTables []string                     // orde estable das táboas
+
 	type topItem struct {
 		Label  string
 		Amount float64
@@ -644,7 +648,7 @@ func (s *server) handleSummaryAll(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		where, args := buildWhereLike(cols, q)
+		where, args := buildWhereLike(ColNames(cols), q)
 
 		// detectar columnas desta táboa
 		tipoCol := pickFirstColumnName(cols, "Tipo", "TipoContrato", "Tipo_licitacion", "Tipo_licitación")
@@ -743,7 +747,9 @@ func (s *server) handleSummaryAll(w http.ResponseWriter, r *http.Request) {
 				sel,
 				where,
 			)
-			// log.Printf("q5: %s\n", q5)
+			// if sel == "Alcaldia_contratos_menores" {
+			// 	log.Printf("[DEBUG q5 SQL] %s ARGS=%v", q5, args)
+			// }
 
 			if rows, err := s.db.Query(q5, args...); err == nil {
 				defer rows.Close()
@@ -755,6 +761,15 @@ func (s *server) handleSummaryAll(w http.ResponseWriter, r *http.Request) {
 						key := ano + "-" + mes // YYYY-MM
 						adxMensual[key] += total
 						adxMensualImporte[key] += totalImporte
+
+						// apilar por táboa
+						m, ok := countsByMonth[sel]
+						if !ok {
+							m = map[string]int{}
+							countsByMonth[sel] = m
+							stackTables = append(stackTables, sel) // gardar orde de aparición
+						}
+						m[key] += total
 					}
 				}
 			}
@@ -912,6 +927,7 @@ func (s *server) handleSummaryAll(w http.ResponseWriter, r *http.Request) {
 	lblAnx, _ := json.Marshal([]string{"Con PDF", "Sen PDF"})
 	cntAnx, _ := json.Marshal([]int{conPDF, total - conPDF})
 
+	// meses ordenados
 	mArr := make([]struct {
 		K string
 		V int
@@ -933,10 +949,28 @@ func (s *server) handleSummaryAll(w http.ResponseWriter, r *http.Request) {
 		adxMesImportes = append(adxMesImportes, adxMensualImporte[p.K])
 	}
 
+	// series apiladas por táboa (misma orde que stackTables)
+	var adxMesSeries []string     // nomes das táboas
+	var adxMesCountsStack [][]int // matriz [serie][mesIndex]
+	for _, t := range stackTables {
+		adxMesSeries = append(adxMesSeries, t)
+		row := make([]int, len(adxMesLabels))
+		byMonth := countsByMonth[t]
+		for i, mm := range adxMesLabels {
+			if byMonth[mm] > 0 {
+				row[i] = byMonth[mm]
+			}
+		}
+		adxMesCountsStack = append(adxMesCountsStack, row)
+	}
+
 	// serializar a JSON para o template
 	lblMes, _ := json.Marshal(adxMesLabels)
 	cntMes, _ := json.Marshal(adxMesCounts)
 	impMes, _ := json.Marshal(adxMesImportes)
+	// barras apiladas
+	seriesMes, _ := json.Marshal(adxMesSeries)
+	stackMes, _ := json.Marshal(adxMesCountsStack)
 
 	sort.Slice(topLic, func(i, j int) bool { return topLic[i].Amount > topLic[j].Amount })
 	if len(topLic) > 20 {
@@ -965,14 +999,16 @@ func (s *server) handleSummaryAll(w http.ResponseWriter, r *http.Request) {
 		"ImpLabels": js(lblImp), "ImpTotals": js(valImp),
 		"AdxLabels": js(lblAdx), "AdxCounts": js(cntAdx),
 		"AnexosLabels": js(lblAnx), "AnexosCounts": js(cntAnx),
-		"concello":       concello,
-		"AdxMesLabels":   template.JS(lblMes),
-		"AdxMesCounts":   template.JS(cntMes),
-		"AdxMesImportes": template.JS(impMes),
-		"TopLicLabels":   template.JS(lblTop),
-		"TopLicAmounts":  template.JS(amtTop),
-		"TopLicURLs":     template.JS(urlTop),
-		"TopLicObjects":  template.JS(objTop),
+		"concello":          concello,
+		"AdxMesLabels":      template.JS(lblMes),
+		"AdxMesCounts":      template.JS(cntMes),
+		"AdxMesImportes":    template.JS(impMes),
+		"TopLicLabels":      template.JS(lblTop),
+		"TopLicAmounts":     template.JS(amtTop),
+		"TopLicURLs":        template.JS(urlTop),
+		"TopLicObjects":     template.JS(objTop),
+		"AdxMesSeries":      template.JS(seriesMes),
+		"AdxMesCountsStack": template.JS(stackMes),
 	}
 	if err := s.tpl.ExecuteTemplate(w, "summary_all.gohtml", data); err != nil {
 		http.Error(w, err.Error(), 500)

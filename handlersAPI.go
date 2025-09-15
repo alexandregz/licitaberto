@@ -32,6 +32,10 @@ func (s *server) handleAPISummaryAll(w http.ResponseWriter, r *http.Request) {
 	adxMensual := map[string]int{}
 	adxMensualImporte := map[string]float64{}
 
+	// para barras apiladas: conteos por táboa e por mes
+	countsByMonth := map[string]map[string]int{} // table -> month(YYYY-MM) -> count
+	var stackTables []string                     // orde estable das táboas
+
 	type topItem struct {
 		Label  string
 		Amount float64
@@ -48,7 +52,7 @@ func (s *server) handleAPISummaryAll(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			continue
 		}
-		where, args := buildWhereLike(cols, q)
+		where, args := buildWhereLike(ColNames(cols), q)
 
 		// detectar columnas desta táboa
 		tipoCol := pickFirstColumnName(cols, "Tipo", "TipoContrato", "Tipo_licitacion", "Tipo_licitación")
@@ -131,7 +135,9 @@ func (s *server) handleAPISummaryAll(w http.ResponseWriter, r *http.Request) {
 				sel,
 				where,
 			)
-			// log.Printf("q5: %s\n", q5)
+			// if sel == "Alcaldia_contratos_menores" {
+			// 	log.Printf("[DEBUG q5 SQL] %s ARGS=%v", q5, args)
+			// }
 
 			if rows, err := s.db.Query(q5, args...); err == nil {
 				defer rows.Close()
@@ -143,6 +149,16 @@ func (s *server) handleAPISummaryAll(w http.ResponseWriter, r *http.Request) {
 						key := ano + "-" + mes // YYYY-MM
 						adxMensual[key] += total
 						adxMensualImporte[key] += totalImporte
+
+						// log.Printf("[DEBUG q5] %s-%s → total=%d importe=%.2f", ano, mes, total, totalImporte)
+
+						m, ok := countsByMonth[sel]
+						if !ok {
+							m = map[string]int{}
+							countsByMonth[sel] = m
+							stackTables = append(stackTables, sel)
+						}
+						m[key] += total
 					}
 				}
 			}
@@ -301,6 +317,21 @@ func (s *server) handleAPISummaryAll(w http.ResponseWriter, r *http.Request) {
 		adxMesImportes = append(adxMesImportes, adxMensualImporte[p.K])
 	}
 
+	// series apiladas por táboa (misma orde que stackTables)
+	var adxMesSeries []string
+	var adxMesCountsStack [][]int
+	for _, t := range stackTables {
+		adxMesSeries = append(adxMesSeries, t)
+		row := make([]int, len(adxMesLabels))
+		byMonth := countsByMonth[t]
+		for i, mm := range adxMesLabels {
+			if byMonth[mm] > 0 {
+				row[i] = byMonth[mm]
+			}
+		}
+		adxMesCountsStack = append(adxMesCountsStack, row)
+	}
+
 	sort.Slice(topLic, func(i, j int) bool { return topLic[i].Amount > topLic[j].Amount })
 	if len(topLic) > 20 {
 		topLic = topLic[:20]
@@ -323,15 +354,17 @@ func (s *server) handleAPISummaryAll(w http.ResponseWriter, r *http.Request) {
 		"tiposLabels": tiposLabels, "tiposCounts": tiposCounts,
 		"impLabels": impLabels, "impTotals": impTotals,
 		"adxLabels": adxLabels, "adxCounts": adxCounts,
-		"anexosLabels":   []string{"Con PDF", "Sen PDF"},
-		"anexosCounts":   []int{conPDF, total - conPDF},
-		"adxMesLabels":   adxMesLabels,
-		"adxMesCounts":   adxMesCounts,
-		"adxMesImportes": adxMesImportes,
-		"topLicLabels":   topLicLabels,
-		"topLicAmounts":  topLicAmounts,
-		"topLicUrls":     topLicURLs,
-		"topLicObjects":  topLicObjects,
+		"anexosLabels":      []string{"Con PDF", "Sen PDF"},
+		"anexosCounts":      []int{conPDF, total - conPDF},
+		"adxMesLabels":      adxMesLabels,
+		"adxMesCounts":      adxMesCounts,
+		"adxMesImportes":    adxMesImportes,
+		"topLicLabels":      topLicLabels,
+		"topLicAmounts":     topLicAmounts,
+		"topLicUrls":        topLicURLs,
+		"topLicObjects":     topLicObjects,
+		"adxMesSeries":      adxMesSeries,
+		"adxMesCountsStack": adxMesCountsStack,
 	})
 }
 
@@ -349,7 +382,7 @@ func (s *server) handleAPISummary(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	where, args := buildWhereLike(cols, q)
+	where, args := buildWhereLike(ColNames(cols), q)
 
 	// detección de columnas
 	tipoCol := pickFirstColumnName(cols, "Tipo", "TipoContrato", "Tipo_licitacion", "Tipo_licitación")

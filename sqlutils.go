@@ -1,11 +1,18 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
+
+	"golang.org/x/text/unicode/norm"
+
+	"github.com/mattn/go-sqlite3"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 // ==== Datos e utilidades SQL ====
@@ -17,38 +24,61 @@ var (
 	dotNumRe  = regexp.MustCompile(`^\s*\d+(\.\d+)?\s*$`)
 )
 
-// --- Normalización simple: quitar acentos e pasar a minúsculas ---
-var accentPairs = []string{
-	"Á", "A", "À", "A", "Â", "A", "Ä", "A", "Ã", "A", "á", "a", "à", "a", "â", "a", "ä", "a", "ã", "a",
-	"É", "E", "È", "E", "Ê", "E", "Ë", "E", "é", "e", "è", "e", "ê", "e", "ë", "e",
-	"Í", "I", "Ì", "I", "Î", "I", "Ï", "I", "í", "i", "ì", "i", "î", "i", "ï", "i",
-	"Ó", "O", "Ò", "O", "Ô", "O", "Ö", "O", "Õ", "O", "ó", "o", "ò", "o", "ô", "o", "ö", "o", "õ", "o",
-	"Ú", "U", "Ù", "U", "Û", "U", "Ü", "U", "ú", "u", "ù", "u", "û", "u", "ü", "u",
-	"Ñ", "N", "ñ", "n", "Ç", "C", "ç", "c",
-}
-
-var noAccentsReplacer = strings.NewReplacer(accentPairs...)
-
-// Normaliza unha cadea en Go (para o parámetro da busca)
-func noAccentsLower(s string) string {
-	s = noAccentsReplacer.Replace(s)
-	return strings.ToLower(s)
-}
-
-// Constrúe a expresión SQL que quita acentos e baixa a minúsculas nunha columna
-// Ex.: sqlNoAccents("CAST(col AS TEXT)") -> LOWER(REPLACE(REPLACE(..., 'Á','A'), ...))
-func sqlNoAccents(expr string) string {
-	s := expr
-	for i := 0; i < len(accentPairs); i += 2 {
-		from, to := accentPairs[i], accentPairs[i+1]
-		s = fmt.Sprintf("REPLACE(%s,'%s','%s')", s, from, to)
+// ColNames devolve só os nomes das columnas.
+func ColNames(cols []Column) []string {
+	out := make([]string, 0, len(cols))
+	for _, c := range cols {
+		out = append(out, c.Name)
 	}
-	return "LOWER(" + s + ")"
+	return out
 }
 
 // Converte un campo numérico en formato "12.345,67" a REAL en SQLite
 func sqlToRealEuro(expr string) string {
 	return fmt.Sprintf("CAST(REPLACE(REPLACE(%s, '.', ''), ',', '.') AS REAL)", expr)
+}
+
+// asciiFold elimina diacríticos e pasa a minúsculas.
+func asciiFold(s string) string {
+	// Normalizamos a NFD e eliminamos marcas (Mn)
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range norm.NFD.String(s) {
+		if unicode.Is(unicode.Mn, r) {
+			continue // descarta a marca diacrítica
+		}
+		b.WriteRune(unicode.ToLower(r))
+	}
+	return b.String()
+}
+
+// Rexistra unha función SQL chamada unaccent_lower(text) -> text
+func registerSQLiteFuncs(db *sql.DB) error {
+	conn, err := db.Conn(context.Background())
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	return conn.Raw(func(dc any) error {
+		c, ok := dc.(*sqlite3.SQLiteConn)
+		if !ok {
+			return nil
+		}
+		return c.RegisterFunc("unaccent_lower", func(s any) any {
+			if s == nil {
+				return ""
+			}
+			switch v := s.(type) {
+			case string:
+				// log.Printf("unaccent_lower string: [%s] [%s]", v, asciiFold(v))
+				return asciiFold(v)
+			default:
+				// log.Printf("unaccent_lower string: [%s] [%s]", v, asciiFold(fmt.Sprint(v)))
+				return asciiFold(fmt.Sprint(v))
+			}
+		}, true) // pure=true
+	})
 }
 
 // --- Normalización simple ---
@@ -153,22 +183,19 @@ func listBaseTables(db *sql.DB) ([]string, error) {
 
 // ==== SQL utils ====
 
-// Build WHERE with LIKE across all columns (casting to TEXT when needed)
-func buildWhereLike(cols []Column, q string) (string, []any) {
+// buildWhereLike crea unha WHERE con OR sobre as columnas, aplicando unaccent_lower, substitúe á anterior versión
+func buildWhereLike(cols []string, q string) (string, []any) {
 	q = strings.TrimSpace(q)
-	if q == "" || len(cols) == 0 {
+	if q == "" {
 		return "", nil
 	}
-	// normalizamos o termo de busca en Go
-	nq := "%" + noAccentsLower(q) + "%"
-
+	like := "%" + asciiFold(q) + "%"
 	parts := make([]string, 0, len(cols))
 	args := make([]any, 0, len(cols))
 	for _, c := range cols {
-		colExpr := fmt.Sprintf("CAST(%s AS TEXT)", quoteIdent(c.Name))
-		// normalizamos tamén a columna no SQL
-		parts = append(parts, sqlNoAccents(colExpr)+" LIKE ?")
-		args = append(args, nq)
+		parts = append(parts, fmt.Sprintf("unaccent_lower(CAST(%s AS TEXT)) LIKE ?", quoteIdent(c)))
+		// parts = append(parts, fmt.Sprintf("unaccent_lower(%s) LIKE ?", quoteIdent(c)))
+		args = append(args, like)
 	}
 	return "WHERE (" + strings.Join(parts, " OR ") + ")", args
 }

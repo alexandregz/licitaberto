@@ -125,6 +125,147 @@
 </main>
 
 <script>
+// manter referencia global para poder destruír
+let chAdxMensuais = null;
+
+// Paleta fixa (bg, border). Engade/axusta cores se queres.
+const PALETTE = [
+  ['rgba(33,150,243,0.7)','rgba(33,150,243,1)'],   // azul
+  ['rgba(76,175,80,0.7)','rgba(76,175,80,1)'],     // verde
+  ['rgba(255,152,0,0.7)','rgba(255,152,0,1)'],     // laranxa
+  ['rgba(156,39,176,0.7)','rgba(156,39,176,1)'],   // púrpura
+  ['rgba(244,67,54,0.7)','rgba(244,67,54,1)'],     // vermello
+  ['rgba(0,188,212,0.7)','rgba(0,188,212,1)'],     // cian
+  ['rgba(121,85,72,0.7)','rgba(121,85,72,1)'],     // marrón
+  ['rgba(63,81,181,0.7)','rgba(63,81,181,1)'],     // índigo
+  ['rgba(205,220,57,0.7)','rgba(205,220,57,1)'],   // lima
+  ['rgba(158,158,158,0.7)','rgba(158,158,158,1)'], // gris
+];
+
+// Hash determinístico (djb2) → índice de cor estábel por nome
+function hashStr(s) {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h) + s.charCodeAt(i);
+  // garantir positivo en JS
+  return (h >>> 0);
+}
+
+// cores fixas
+const FIXED = {
+  'Alcaldia_contratos_menores': ['rgba(33,150,243,0.7)','rgba(33,150,243,1)'],
+  'Xunta_de_Goberno_licitacions': ['rgba(156,39,176,0.7)','rgba(156,39,176,1)'],
+};
+function colorForSeries(name) {
+  if (FIXED[name]) return FIXED[name];
+  const idx = hashStr(String(name || '')) % PALETTE.length;
+  return PALETTE[idx];
+}
+
+// constrúe os datasets apilados + liña de importes
+function buildStackDatasets(series, matrix, importes) {
+  const ds = [];
+  for (let i = 0; i < (series || []).length; i++) {
+    const label = series[i];
+    const [bg, border] = colorForSeries(label); // cor fixa por táboa
+    ds.push({
+      type: 'bar',
+      label,
+      data: (matrix && matrix[i]) ? matrix[i] : [],
+      yAxisID: 'y',
+      backgroundColor: bg,
+      borderColor: border,
+      borderWidth: 1,
+      hoverBorderWidth: 1,
+    });
+  }
+  // Serie de liña para o importe total (€) cunha cor constante
+  ds.push({
+    type: 'line',
+    label: 'Importe total (€)',
+    data: importes || [],
+    yAxisID: 'y1',
+    borderColor: 'rgba(255, 99, 132, 1)',
+    backgroundColor: 'rgba(255, 99, 132, 0.25)',
+    borderWidth: 2,
+    pointRadius: 2,
+  });
+  return ds;
+}
+
+// crea (ou recrea) a gráfica mensual desde cero
+function renderAdxMensuais(labels, series, matrix, importes) {
+  const el = document.getElementById('chartAdxMensuais');
+  if (!el) return;
+
+  // 🔧 matar instancia previa para evitar “cacheos”
+  if (chAdxMensuais) {
+    chAdxMensuais.destroy();
+    chAdxMensuais = null;
+  }
+
+  chAdxMensuais = new Chart(el, {
+    type: 'bar',
+    data: {
+      labels: labels || [],
+      datasets: buildStackDatasets(series || [], matrix || [], importes || [])
+    },
+    options: {
+      responsive: true,
+      animation: false,
+      interaction: { mode: 'index', intersect: false, axis: 'x' },
+      scales: {
+        x: { stacked: true },
+        y: {
+          stacked: true,
+          position: 'left',
+          beginAtZero: true,
+          title: { display: true, text: 'Nº licitacións' },
+          ticks: {
+            stepSize: 1,
+            callback: v => Number.isInteger(v) ? v : null
+          }
+        },
+        y1: {
+          position: 'right',
+          beginAtZero: true,
+          grid: { drawOnChartArea: false },
+          ticks: {
+            callback: v => new Intl.NumberFormat('es-ES', {
+              style: 'currency', currency: 'EUR'
+            }).format(v)
+          },
+          title: { display: true, text: 'Importe total (€)' }
+        }
+      },
+      plugins: {
+        legend: { display: true },
+        tooltip: {
+          callbacks: {
+            label: function (ctx) {
+              // Ocultar se o valor é 0
+              if (ctx.parsed.y === 0) {
+                return null;
+              }
+              if (ctx.dataset.type === 'line') {
+                return ctx.dataset.label + ': ' +
+                  new Intl.NumberFormat('es-ES', {
+                    style: 'currency', currency: 'EUR'
+                  }).format(ctx.parsed.y);
+              }
+              return ctx.dataset.label + ': ' + ctx.parsed.y;
+            }
+          }
+        }
+      }
+    }
+
+  });
+}
+
+
+
+
+
 const TiposLabels = {{ .TiposLabels }};
 const TiposCounts = {{ .TiposCounts }};
 const ImpLabels   = {{ .ImpLabels }};
@@ -137,67 +278,11 @@ const AnexosCounts= {{ .AnexosCounts }};
 const AdxMesLabels   = {{ .AdxMesLabels }};
 const AdxMesCounts   = {{ .AdxMesCounts }};
 const AdxMesImportes = {{ .AdxMesImportes }};
+const AdxMesSeries      = {{ .AdxMesSeries }};
+const AdxMesCountsStack = {{ .AdxMesCountsStack }};
 
-const chAdxMensuais = new Chart(document.getElementById('chartAdxMensuais'), {
-  type: 'bar',
-  data: {
-    labels: AdxMesLabels,
-    datasets: [
-      // Barras: número de licitacións
-      {
-        type: 'bar',
-        label: 'Adxudicacións',
-        data: AdxMesCounts,
-        yAxisID: 'y',
-        backgroundColor: 'rgba(33, 150, 243, 0.6)',     // azul
-        borderColor: 'rgba(33, 150, 243, 1)',
-        borderWidth: 1
-      },
-      // Liña: importe total (€)
-      {
-        type: 'line',
-        label: 'Importe total (€)',
-        data: AdxMesImportes,
-        yAxisID: 'y1',
-        borderColor: 'rgba(255, 99, 132, 1)',           // vermello
-        backgroundColor: 'rgba(255, 99, 132, 0.2)',
-        tension: 0.2,
-        pointRadius: 2,
-        borderWidth: 2,
-        pointHoverRadius: 5,
-        pointHoverBackgroundColor: 'rgba(255, 99, 132, 1)',
-        pointRadius: 3
-      }
-    ]
-  },
-  options: {
-    responsive: true,
-    interaction: { mode: 'index', intersect: false },
-    stacked: false,
-    scales: {
-      y: {
-        position: 'left',
-        beginAtZero: true,
-        title: { display: true, text: 'Nº licitacións' },
-        ticks: {
-          stepSize: 1,
-          callback: v => Number.isInteger(v) ? v : null
-        }
-      },
-      y1: {
-        position: 'right',
-        beginAtZero: true,
-        grid: { drawOnChartArea: false },
-        ticks: {
-          callback: v => new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' }).format(v)
-        },
-        title: { display: true, text: 'Importe total (€)' }
-      }
-    },
-    plugins: { legend: { display: true } }
-  }
-});
-
+// 💡 crear a gráfica inicial “desde cero”
+renderAdxMensuais(AdxMesLabels, AdxMesSeries, AdxMesCountsStack, AdxMesImportes);
 
 const TopLicLabels  = {{ .TopLicLabels }};
 const TopLicAmounts = {{ .TopLicAmounts }};
@@ -272,8 +357,6 @@ document.getElementById('chartTopImportes').addEventListener('click', (evt)=>{
   const href = urls[idx];
   if (href) window.open(href, '_blank', 'noopener');
 });
-
-
 
 
 // Charts iniciais
@@ -359,6 +442,13 @@ async function loadAll() {
   // refrescar lista textual para poder seleccionar/copiar
   //renderTopList(data.topLicLabels, data.topLicUrls);
 
+  // reload de data para importes
+  renderAdxMensuais(
+    data.adxMesLabels || [],
+    data.adxMesSeries || [],
+    data.adxMesCountsStack || [],
+    data.adxMesImportes || []
+  );
 
   // actualizar URL sen recargar
   const url = new URL(location.href);

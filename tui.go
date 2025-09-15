@@ -177,7 +177,7 @@ func (m *tuiModel) loadTable() (tuiModel, tea.Cmd) {
 		return *m, nil
 	}
 	m.cols = cols
-	where, args := buildWhereLike(cols, m.q)
+	where, args := buildWhereLike(ColNames(cols), m.q)
 	rows, err := fetchPage(m.db, m.table, cols, where, m.order, m.desc, m.page, m.perPage, args)
 	if err != nil {
 		m.status = err.Error()
@@ -223,7 +223,7 @@ func (m *tuiModel) renderHistogram() string {
 	if m.table == "" || m.chartBy == "" {
 		return ""
 	}
-	where, args := buildWhereLike(m.cols, m.q)
+	where, args := buildWhereLike(ColNames(m.cols), m.q)
 	labels, counts, err := histogramCounts(m.db, m.table, m.chartBy, where, args, 20, m.desc, true)
 	if err != nil || len(labels) == 0 {
 		return "(sen datos)"
@@ -255,7 +255,7 @@ func (m *tuiModel) exportCSV() (string, error) {
 		return "", errors.New("sen táboa")
 	}
 	cols := m.cols
-	where, args := buildWhereLike(cols, m.q)
+	where, args := buildWhereLike(ColNames(cols), m.q)
 	rows, err := fetchPage(m.db, m.table, cols, where, m.order, m.desc, 1, 1_000_000, args)
 	if err != nil {
 		return "", err
@@ -288,7 +288,7 @@ func (m *tuiModel) exportXLSX() (string, error) {
 		return "", errors.New("sen táboa")
 	}
 	cols := m.cols
-	where, args := buildWhereLike(cols, m.q)
+	where, args := buildWhereLike(ColNames(cols), m.q)
 	rows, err := fetchPage(m.db, m.table, cols, where, m.order, m.desc, 1, 1_000_000, args)
 	if err != nil {
 		return "", err
