@@ -36,7 +36,7 @@
 <body>
 <header class="container-fluid nav">
   <nav>
-    <ul><li><strong>Gráficas {{ .concello }} por táboa</strong></li></ul>
+    <ul><li><strong>Gráficas {{ .concello }} por táboa</strong> - <code id="taboa_en_cabeceira">{{ .Table }}</code></li></ul>
     <ul>
       <li><a href="/">Index</a></li>
     </ul>
@@ -60,8 +60,6 @@
       </select>
     </label>
     <div>
-      <button type="submit">Aplicar</button>
-      <a role="button" href="/summary">Limpar</a>
       <a role="button" class="secondary" href="/table/{{ .Table }}" id="link_ver_listado">Ver listado</a>
     </div>
   </form>
@@ -357,8 +355,10 @@ qInput.addEventListener('input', loadDebounced);
 tSel.addEventListener('change', ()=>{ 
                                         qInput.value = qInput.value.trim(); 
                                         document.getElementById('anexos_en_texto').innerText = tSel.value + '_files';
+                                        document.getElementById('taboa_en_cabeceira').innerText = tSel.value;
                                         document.getElementById('link_ver_listado').href = '/table/' + tSel.value;
-                                        document.getElementById('taboa_num_adxudicacions_mes_a_mes').innerText = tSel.value; 
+                                        document.getElementById('taboa_num_adxudicacions_mes_a_mes').innerText = tSel.value;
+                                       
                                         loadSummary(); 
                                     });
 </script>
