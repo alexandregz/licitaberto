@@ -183,6 +183,41 @@ func listBaseTables(db *sql.DB) ([]string, error) {
 
 // ==== SQL utils ====
 
+// Detecta se existe unha columna nunha táboa
+func columnExists(db *sql.DB, table, col string) bool {
+	rows, err := db.Query("PRAGMA table_info(" + quoteIdent(table) + ")")
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err == nil {
+			if strings.EqualFold(name, col) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Devolve a columna correcta do adxudicatario para unha táboa
+func pickAdjCol(db *sql.DB, table string) string {
+	candidates := []string{
+		"Adjudicatario", "Adxudicatario",
+		"EMPRESA_ADXUDICATARIA", "Empresa_adxudicataria",
+	}
+	for _, c := range candidates {
+		if columnExists(db, table, c) {
+			return c
+		}
+	}
+	return "" // non hai columna coñecida
+}
+
 // buildWhereLike crea unha WHERE con OR sobre as columnas, aplicando unaccent_lower, substitúe á anterior versión
 func buildWhereLike(cols []string, q string) (string, []any) {
 	q = strings.TrimSpace(q)
