@@ -629,6 +629,14 @@ func (s *server) handleSummaryAll(w http.ResponseWriter, r *http.Request) {
 	countsByMonth := map[string]map[string]int{} // table -> month(YYYY-MM) -> count
 	var stackTables []string                     // orde estable das táboas
 
+	// ── NOVO: acumuladores por entidade (para barras apiladas)
+	tiposCountByTable := map[string]map[string]int{}       // table -> tipo -> count
+	tiposImporteByTable := map[string]map[string]float64{} // table -> tipo -> importe total
+	adxCountByTable := map[string]map[string]int{}         // table -> adxudicatario -> count
+
+	// manter orde estable de táboas
+	var stackTablesAll []string
+
 	type topItem struct {
 		Label  string
 		Amount float64
@@ -669,6 +677,13 @@ func (s *server) handleSummaryAll(w http.ResponseWriter, r *http.Request) {
 					var c int
 					_ = rows.Scan(&k, &c)
 					tiposCount[k] += c
+
+					// ── por entidade (para apilar)
+					if _, ok := tiposCountByTable[sel]; !ok {
+						tiposCountByTable[sel] = map[string]int{}
+						stackTablesAll = append(stackTablesAll, sel)
+					}
+					tiposCountByTable[sel][k] += c
 				}
 				rows.Close()
 			}
@@ -689,27 +704,55 @@ func (s *server) handleSummaryAll(w http.ResponseWriter, r *http.Request) {
 					var v float64
 					_ = rows.Scan(&k, &v)
 					tiposImporte[k] += v
+
+					// ── por entidade (para apilar)
+					if _, ok := tiposImporteByTable[sel]; !ok {
+						tiposImporteByTable[sel] = map[string]float64{}
+						// stackTablesAll xa se encheu antes, non fai falla repetir
+					}
+					tiposImporteByTable[sel][k] += v
+
 				}
 				rows.Close()
 			}
 		}
 
-		// top adxudicatarios (acumulamos; o top farase ao final)
-		if adxCol != "" {
+		// === Top adxudicatarios por táboa: detecta columna e agrega ===
+		if adxCol := pickAdjCol(s.db, sel); adxCol != "" {
+			// normalizamos o nome para agrupar (baixa, trim). Pero devolvemos o "display" (primeiro visto).
 			q3 := fmt.Sprintf(`
-				SELECT COALESCE(NULLIF(TRIM(%s),''),'(Sen adxudicatario)') AS k, COUNT(*) AS c
-				FROM %s %s
-				GROUP BY k
-			`, quoteIdent(adxCol), baseQ, where)
-			rows, err := s.db.Query(q3, args...)
-			if err == nil {
-				for rows.Next() {
-					var k string
-					var c int
-					_ = rows.Scan(&k, &c)
-					adxCount[k] += c
+					SELECT
+						LOWER(TRIM(CAST(%[1]s AS TEXT))) as keynorm,
+						COALESCE(NULLIF(TRIM(CAST(%[1]s AS TEXT)), ''), '(sen nome)') as display,
+						COUNT(*) as c
+					FROM %[2]s
+					%[3]s
+					GROUP BY keynorm
+					ORDER BY c DESC
+					LIMIT 100
+				`, quoteIdent(adxCol), baseQ, where)
+
+			if rows, err := s.db.Query(q3, args...); err == nil {
+				defer rows.Close()
+				// mapa da táboa
+				m, ok := adxCountByTable[sel]
+				if !ok {
+					m = map[string]int{}
+					adxCountByTable[sel] = m
 				}
-				rows.Close()
+				for rows.Next() {
+					var keynorm, display string
+					var c int
+					if err := rows.Scan(&keynorm, &display, &c); err == nil {
+						if display == "" {
+							display = "(sen nome)"
+						}
+						// global (para escoller top 10 final)
+						adxCount[display] += c
+						// por táboa (para pila)
+						m[display] += c
+					}
+				}
 			}
 		}
 
@@ -861,7 +904,6 @@ func (s *server) handleSummaryAll(w http.ResponseWriter, r *http.Request) {
 				rows.Close()
 			}
 		}
-
 	}
 
 	// pasar mapas a arrays ordenados
@@ -886,6 +928,19 @@ func (s *server) handleSummaryAll(w http.ResponseWriter, r *http.Request) {
 		tiposLabels = append(tiposLabels, p.K)
 		tiposCounts = append(tiposCounts, p.V)
 	}
+	// ── matriz apilada por entidade para "Número por Tipo"
+	var tiposSeries []string     // nomes de táboas
+	var tiposCountsStack [][]int // [serie][labelIndex]
+	tiposSeries = append(tiposSeries, stackTablesAll...)
+	for _, t := range tiposSeries {
+		row := make([]int, len(tiposLabels))
+		m := tiposCountByTable[t]
+		for i, lab := range tiposLabels {
+			row[i] = m[lab]
+		}
+		tiposCountsStack = append(tiposCountsStack, row)
+	}
+	// ---
 
 	// tiposImporte -> desc por V
 	impArr := make([]kvF, 0, len(tiposImporte))
@@ -899,6 +954,19 @@ func (s *server) handleSummaryAll(w http.ResponseWriter, r *http.Request) {
 		impLabels = append(impLabels, p.K)
 		impTotals = append(impTotals, p.V)
 	}
+	// ── matriz apilada por entidade para "Importe total por Tipo"
+	var impSeries []string
+	var impTotalsStack [][]float64 // [serie][labelIndex]
+	impSeries = append(impSeries, stackTablesAll...)
+	for _, t := range impSeries {
+		row := make([]float64, len(impLabels))
+		m := tiposImporteByTable[t]
+		for i, lab := range impLabels {
+			row[i] = m[lab]
+		}
+		impTotalsStack = append(impTotalsStack, row)
+	}
+	// ---
 
 	// adxCount -> top 10 desc
 	adxArr := make([]kvI, 0, len(adxCount))
@@ -915,6 +983,19 @@ func (s *server) handleSummaryAll(w http.ResponseWriter, r *http.Request) {
 		adxLabels = append(adxLabels, p.K)
 		adxCounts = append(adxCounts, p.V)
 	}
+	// ── matriz apilada por entidade para "Top 10 adxudicatarios"
+	var adxSeries []string
+	var adxCountsStack [][]int // [serie][labelIndex]
+	adxSeries = append(adxSeries, stackTablesAll...)
+	for _, t := range adxSeries {
+		row := make([]int, len(adxLabels))
+		m := adxCountByTable[t]
+		for i, lab := range adxLabels {
+			row[i] = m[lab]
+		}
+		adxCountsStack = append(adxCountsStack, row)
+	}
+	// ---
 
 	// JSON seguro para template
 	type js = template.JS
@@ -926,6 +1007,13 @@ func (s *server) handleSummaryAll(w http.ResponseWriter, r *http.Request) {
 	cntAdx, _ := json.Marshal(adxCounts)
 	lblAnx, _ := json.Marshal([]string{"Con PDF", "Sen PDF"})
 	cntAnx, _ := json.Marshal([]int{conPDF, total - conPDF})
+	// ── NOVO: serialización para apiladas
+	seriesTipos, _ := json.Marshal(tiposSeries)
+	stackTipos, _ := json.Marshal(tiposCountsStack)
+	seriesImp, _ := json.Marshal(impSeries)
+	stackImp, _ := json.Marshal(impTotalsStack)
+	seriesAdx, _ := json.Marshal(adxSeries)
+	stackAdx, _ := json.Marshal(adxCountsStack)
 
 	// meses ordenados
 	mArr := make([]struct {
@@ -1009,6 +1097,12 @@ func (s *server) handleSummaryAll(w http.ResponseWriter, r *http.Request) {
 		"TopLicObjects":     template.JS(objTop),
 		"AdxMesSeries":      template.JS(seriesMes),
 		"AdxMesCountsStack": template.JS(stackMes),
+		"TiposSeries":       template.JS(seriesTipos),
+		"TiposCountsStack":  template.JS(stackTipos),
+		"ImpSeries":         template.JS(seriesImp),
+		"ImpTotalsStack":    template.JS(stackImp),
+		"AdxSeries":         template.JS(seriesAdx),
+		"AdxCountsStack":    template.JS(stackAdx),
 	}
 	if err := s.tpl.ExecuteTemplate(w, "summary_all.gohtml", data); err != nil {
 		http.Error(w, err.Error(), 500)

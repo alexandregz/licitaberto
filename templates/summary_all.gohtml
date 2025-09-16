@@ -2,12 +2,14 @@
 <!doctype html>
 <html lang="gl">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Resumo global · {{ .concello }}</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Resumo global — {{ .concello }}</title>
   <link rel="stylesheet" href="/static/pico.min.css">
   <link rel="stylesheet" href="/static/compact.css">
+
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
   <style>
     header.nav { position: sticky; top: 0; backdrop-filter: blur(6px); }
     .grid { display: grid; gap: 1.25rem; grid-template-columns: repeat(12, 1fr); }
@@ -15,453 +17,431 @@
     .span-6 { grid-column: span 6; }
     .span-12{ grid-column: span 12; }
     @media (max-width: 1024px){ .span-6{ grid-column: span 12; } }
-    canvas { max-height: 360px; }
+    canvas { max-height: 460px; }
     .toolbar { display: grid; gap: .75rem; grid-template-columns: 1fr auto; align-items: end; }
+    #chartAdxTop{max-height:640px}
+
+    /* + ALTURA extra para as dúas gráficas de “tipo” */
+    #chartTipos, #chartImpTipos { height: 520px; max-height: 520px; }
+
+    /* + A tarta máis grande */
+    #chartAnexos { height: 420px; max-height: 420px; }
+
+    /* Se usas a grella 12 columnas, a tarta en 6 para non quedar enana */
+    @media (min-width: 900px){
+      .span-6-md { grid-column: span 6; }
+    }
   </style>
+
   <script>
   // Plugin: pon cursor "pointer" se o elemento baixo o rato ten URL asociada
   const cursorLinkPlugin = {
     id: 'cursorLinkPlugin',
     afterEvent(chart, args) {
-      const ev = args.event;
       const els = chart.getActiveElements();
       const urls = chart.options.linkUrls || [];
-      const canvas = chart.canvas;
-      let pointer = false;
-
-      if (els && els.length) {
-        const idx = els[0].index;
-        // Se hai URL para esa etiqueta, activamos o cursor
-        if (urls[idx]) pointer = true;
-      }
-      canvas.style.cursor = pointer ? 'pointer' : 'default';
+      chart.canvas.style.cursor = (els && els.length && urls[els[0].index]) ? 'pointer' : 'default';
     }
   };
   Chart.register(cursorLinkPlugin);
   </script>
-
 </head>
+
 <body>
-<header class="container-fluid nav">
-  <nav>
-    <ul><li><strong>Resumo global {{ .concello }}</strong></li></ul>
-    <ul>
-      <li><a href="/">Index</a></li>
-    </ul>
-  </nav>
-</header>
+  <header class="container-fluid nav">
+    <nav>
+      <ul><li><strong>Resumo global {{ .concello }}</strong></li></ul>
+      <ul>
+        <li><a href="/">Index</a></li>
+      </ul>
+    </nav>
+  </header>
 
+  <main class="container">
+    {{ template "partials/menu" . }}
 
-<main class="container">
-  <h2>{{ .concello }} · resumo global</h2>
+    <header class="controls">
+      <input id="q" type="search" placeholder="Instant search (≥ 3 caracteres adxudicatario, obxecto, importe...)" value="{{ .Q }}">
+    </header>
 
-  {{ template "partials/menu" . }}
+    <!-- graficas -->
+    <div class="grid">
+      <section class="card span-12">
+        <h3>Número de adxudicacións e importes por mes</h3>
+        <canvas id="chartAdxMensuais"></canvas>
+        <p><small>Podes buscar por datas aprox. (<code>2024-09</code>), por adxudicatario (só en <code>_contratos_menores</code> polo de agora), por importe (<code>1.121.154,74 ou 1160 ou 10.719,93</code>)</small></p>
+      </section>
 
+      <section class="card span-6">
+        <h3>Número por tipo</h3>
+        <canvas id="chartTipos"></canvas>
+      </section>
 
-  <form method="get" action="/summary_all" class="toolbar" role="search">
-    <label>
-      <span>Buscar (tódalas táboas)</span>
-      <input type="search" name="q" value="{{ .Q }}" placeholder="ex.: adxudicatario, obxecto, importe..." />
-    </label>
-    <div>
-      <button type="submit">Aplicar</button>
-      <a role="button" href="/summary_all">Limpar</a>
+      <section class="card span-6">
+        <h3>Importe total por tipo</h3>
+        <canvas id="chartImpTipos"></canvas>
+      </section>
+
+      <section class="card span-12">
+        <h3>Top 10 adxudicatarios</h3>
+        <canvas id="chartAdxTop"></canvas>
+      </section>
+
+      <section class="card span-12">
+        <h3>Top 20 maiores licitacións</h3>
+        <canvas id="chartTopImportes"></canvas>
+      </section>
+
+      <section class="card span-6 span-6-md">
+        <h3>Con anexos</h3>
+        <canvas id="chartAnexos"></canvas>
+      </section>
     </div>
-  </form>
+  </main>
 
-  {{ if .Q }}<p><small>Filtro aplicado: <mark>{{ .Q }}</mark></small></p>{{ end }}
+  <script>
+  // ========= Cores centralizadas e helpers =========
+  // as cores comentadas están fixadas explicitamente, ver FIXED. O vermello é a linha de "Importe"
+  const PALETTE = [
+    // ['rgba(33,150,243,0.7)','rgba(33,150,243,1)'],
+    ['rgba(76,175,80,0.7)','rgba(76,175,80,1)'],
+    ['rgba(255,152,0,0.7)','rgba(255,152,0,1)'],
+    // ['rgba(156,39,176,0.7)','rgba(156,39,176,1)'],
+    // ['rgba(244,67,54,0.7)','rgba(244,67,54,1)'],
+    ['rgba(0,188,212,0.7)','rgba(0,188,212,1)'],
+    ['rgba(121,85,72,0.7)','rgba(121,85,72,1)'],
+    ['rgba(63,81,181,0.7)','rgba(63,81,181,1)'],
+    // ['rgba(205,220,57,0.7)','rgba(205,220,57,1)'],
+    // ['rgba(158,158,158,0.7)','rgba(158,158,158,1)'],
+  ];
 
-  <div class="grid">
-    <section class="card span-12">
-      <h3>1. Número de adxudicacións e importes por mes</h3>
-      <canvas id="chartAdxMensuais"></canvas>
-    </section>
+  // cores fixas
+  const FIXED = {
+    'Alcaldia_contratos_menores': ['rgba(33,150,243,0.7)','rgba(33,150,243,1)'],
+    'Xunta_de_Goberno_licitacions': ['rgba(156,39,176,0.7)','rgba(156,39,176,1)'],
+    'Pleno_licitacions': ['rgba(205,220,57,0.7)','rgba(205,220,57,1)'],
+    'Xerencia_EPEL_contratos_menores': ['rgba(158,158,158,0.7)','rgba(158,158,158,1)'],
+  };
 
-    <section class="card span-6">
-      <h3>2. Nº de contratos por tipo</h3>
-      <canvas id="chartTipos"></canvas>
-    </section>
+  function colorForSeries(name) {
+    if (FIXED[name]) return FIXED[name];
+    const idx = hashStr(String(name || '')) % PALETTE.length;
+    return PALETTE[idx];
+  }
 
-    <section class="card span-6">
-      <h3>3. Importe total por tipo (€)</h3>
-      <canvas id="chartImportes"></canvas>
-    </section>
+  // Suma todos os segmentos 'bar' da categoría (dataIndex) corrente
+  function stackTotalAt(chart, dataIndex){
+    let total = 0;
+    for (const ds of chart.data.datasets){
+      if (ds.type === 'bar') {
+        const v = Number((ds.data && ds.data[dataIndex]) || 0);
+        if (Number.isFinite(v)) total += v;
+      }
+    }
+    return total;
+  }
 
-    <section class="card span-12">
-      <h3>4. Top 10 adxudicatarios contratos menores</h3>
-      <canvas id="chartAdxudicatarios"></canvas>
-    </section>
+  function hashStr(s){let h=5381;for(let i=0;i<s.length;i++)h=((h<<5)+h)+s.charCodeAt(i);return (h>>>0);}
 
-  <section class="card span-12">
-    <h3>Top 20 maiores licitacións (importe)</h3>
-    <canvas id="chartTopImportes"></canvas>
-    <!-- <div id="topLicList" class="muted" style="margin-top:.5rem"></div> -->
-    <script>
-    /*
-        function renderTopList(labels, urls){
-          const el = document.getElementById('topLicList');
-          if (!el) return;
-          let html = '<ol style="margin:0;padding-left:1.25rem">';
-          (labels || []).forEach((lbl, i)=>{
-            const href = (urls || [])[i] || '';
-            if (href) html += `<li><a href="${href}" target="_blank" rel="noopener">${lbl}</a></li>`;
-            else      html += `<li>${lbl}</li>`;
-          });
-          html += '</ol>';
-          el.innerHTML = html;
-        }
-      renderTopList(TopLicLabels, TopLicURLs);
-      */
-    </script>
-  </section>
+  // devolve o valor correcto segundo a orientación do gráfico (en horizontais o valor está en parsed.x, no resto en parsed.y)
+  function valueFromCtx(ctx){
+    const axis = ctx?.chart?.options?.indexAxis;
+    // en horizontais (indexAxis:'y') o dato vai en parsed.x
+    return axis === 'y' ? ctx.parsed.x : ctx.parsed.y;
+  }
+
+  function tooltipLabelNoZeros(ctx){
+    const v = valueFromCtx(ctx);
+    if (v === 0) return null;
+    if (ctx.dataset.type === 'line') {
+      return ctx.dataset.label + ': ' +
+        new Intl.NumberFormat('es-ES',{style:'currency',currency:'EUR'}).format(v);
+    }
+    return ctx.dataset.label + ': ' + v;
+  }
 
 
-    <section class="card span-6">
-      <h3>5. Contratos con anexos PDF (global)</h3>
-      <canvas id="chartAnexos"></canvas>
-    </section>
+  function buildStack(series, matrix){
+    const ds=[];
+    for(let i=0;i<(series||[]).length;i++){
+      const [bg,b] = colorForSeries(series[i]);
+      ds.push({
+        type:'bar', label: series[i],
+        data: (matrix && matrix[i]) ? matrix[i] : [],
+        yAxisID:'y', backgroundColor:bg, borderColor:b, borderWidth:1, hoverBorderWidth:1
+      });
+    }
+    return ds;
+  }
+  // ========= Fin helpers =========
 
-  </div>
-</main>
+  // Datos do servidor
+  const AdxMesLabels      = {{ .AdxMesLabels }};
+  const AdxMesImportes    = {{ .AdxMesImportes }};
+  const AdxMesSeries      = {{ .AdxMesSeries }};
+  const AdxMesCountsStack = {{ .AdxMesCountsStack }};
 
-<script>
-// manter referencia global para poder destruír
-let chAdxMensuais = null;
+  const TiposLabels       = {{ .TiposLabels }};
+  const TiposSeries       = {{ .TiposSeries }};
+  const TiposCountsStack  = {{ .TiposCountsStack }};
 
-// Paleta fixa (bg, border). Engade/axusta cores se queres.
-const PALETTE = [
-  ['rgba(33,150,243,0.7)','rgba(33,150,243,1)'],   // azul
-  ['rgba(76,175,80,0.7)','rgba(76,175,80,1)'],     // verde
-  ['rgba(255,152,0,0.7)','rgba(255,152,0,1)'],     // laranxa
-  ['rgba(156,39,176,0.7)','rgba(156,39,176,1)'],   // púrpura
-  ['rgba(244,67,54,0.7)','rgba(244,67,54,1)'],     // vermello
-  ['rgba(0,188,212,0.7)','rgba(0,188,212,1)'],     // cian
-  ['rgba(121,85,72,0.7)','rgba(121,85,72,1)'],     // marrón
-  ['rgba(63,81,181,0.7)','rgba(63,81,181,1)'],     // índigo
-  ['rgba(205,220,57,0.7)','rgba(205,220,57,1)'],   // lima
-  ['rgba(158,158,158,0.7)','rgba(158,158,158,1)'], // gris
-];
+  const ImpLabels         = {{ .ImpLabels }};
+  const ImpSeries         = {{ .ImpSeries }};
+  const ImpTotalsStack    = {{ .ImpTotalsStack }};
 
-// Hash determinístico (djb2) → índice de cor estábel por nome
-function hashStr(s) {
-  let h = 5381;
-  for (let i = 0; i < s.length; i++) h = ((h << 5) + h) + s.charCodeAt(i);
-  // garantir positivo en JS
-  return (h >>> 0);
-}
+  const AdxLabels         = {{ .AdxLabels }};
+  const AdxSeries         = {{ .AdxSeries }};
+  const AdxCountsStack    = {{ .AdxCountsStack }};
 
-// cores fixas
-const FIXED = {
-  'Alcaldia_contratos_menores': ['rgba(33,150,243,0.7)','rgba(33,150,243,1)'],
-  'Xunta_de_Goberno_licitacions': ['rgba(156,39,176,0.7)','rgba(156,39,176,1)'],
-};
-function colorForSeries(name) {
-  if (FIXED[name]) return FIXED[name];
-  const idx = hashStr(String(name || '')) % PALETTE.length;
-  return PALETTE[idx];
-}
+  const TopLicLabels      = {{ .TopLicLabels }};
+  const TopLicAmounts     = {{ .TopLicAmounts }};
+  const TopLicURLs        = {{ .TopLicURLs }};
+  const TopLicObjects     = {{ .TopLicObjects }};
 
-// constrúe os datasets apilados + liña de importes
-function buildStackDatasets(series, matrix, importes) {
-  const ds = [];
-  for (let i = 0; i < (series || []).length; i++) {
-    const label = series[i];
-    const [bg, border] = colorForSeries(label); // cor fixa por táboa
+  const AnexosLabels      = {{ .AnexosLabels }};
+  const AnexosCounts      = {{ .AnexosCounts }};
+
+  // refs aos charts para recreación
+  let chAdxMensuais=null, chTipos=null, chImp=null, chAdx=null, chTop=null, chAnx=null;
+
+  // Gráfica mensual (apilada + liña importes)
+  function renderAdxMensuais(labels, series, matrix, importes){
+    const el = document.getElementById('chartAdxMensuais');
+    if (chAdxMensuais) { chAdxMensuais.destroy(); chAdxMensuais=null; }
+    const ds = buildStack(series, matrix);
     ds.push({
-      type: 'bar',
-      label,
-      data: (matrix && matrix[i]) ? matrix[i] : [],
-      yAxisID: 'y',
-      backgroundColor: bg,
-      borderColor: border,
-      borderWidth: 1,
-      hoverBorderWidth: 1,
+      type:'line', label:'Importe total (€)', data: importes||[],
+      yAxisID:'y1', borderColor:'rgba(255,99,132,1)', backgroundColor:'rgba(255,99,132,0.25)',
+      borderWidth:2, pointRadius:2
+    });
+    chAdxMensuais = new Chart(el,{
+      type:'bar',
+      data:{ labels: labels||[], datasets: ds },
+      options:{
+        responsive:true, animation:false,
+        interaction:{mode:'index',intersect:false,axis:'x'},
+        scales:{
+          x:{stacked:true},
+          y:{stacked:true, beginAtZero:true, ticks:{ stepSize:1, callback:v=>Number.isInteger(v)?v:null }, title:{display:true,text:'Nº licitacións'}},
+          y1:{position:'right', beginAtZero:true, grid:{drawOnChartArea:false},
+              ticks:{callback:v=>new Intl.NumberFormat('es-ES',{style:'currency',currency:'EUR'}).format(v)},
+              title:{display:true,text:'Importe total (€)'}}
+        },
+        plugins:{ legend:{display:true}, tooltip:{ callbacks:{ label: tooltipLabelNoZeros } } }
+      }
     });
   }
-  // Serie de liña para o importe total (€) cunha cor constante
-  ds.push({
-    type: 'line',
-    label: 'Importe total (€)',
-    data: importes || [],
-    yAxisID: 'y1',
-    borderColor: 'rgba(255, 99, 132, 1)',
-    backgroundColor: 'rgba(255, 99, 132, 0.25)',
-    borderWidth: 2,
-    pointRadius: 2,
-  });
-  return ds;
-}
 
-// crea (ou recrea) a gráfica mensual desde cero
-function renderAdxMensuais(labels, series, matrix, importes) {
-  const el = document.getElementById('chartAdxMensuais');
-  if (!el) return;
+  // Gráfica “Número por Tipo”
+  function renderTipos(labels, series, matrix){
+    const el = document.getElementById('chartTipos');
+    if (chTipos) { chTipos.destroy(); chTipos=null; }
+    chTipos = new Chart(el,{
+      type:'bar',
+      data:{ labels: labels||[], datasets: buildStack(series, matrix) },
+      options:{
+        maintainAspectRatio: false, responsive:true, interaction:{mode:'index',intersect:false,axis:'x'},
+        scales:{ x:{stacked:true}, y:{stacked:true, beginAtZero:true, ticks:{ stepSize:1, callback:v=>Number.isInteger(v)?v:null}}},
+        plugins:{
+          legend:{ display:true },
+          tooltip:{
+            callbacks:{
+              // segue ocultando segmentos con 0
+              label: tooltipLabelNoZeros,
 
-  // 🔧 matar instancia previa para evitar “cacheos”
-  if (chAdxMensuais) {
-    chAdxMensuais.destroy();
-    chAdxMensuais = null;
-  }
-
-  chAdxMensuais = new Chart(el, {
-    type: 'bar',
-    data: {
-      labels: labels || [],
-      datasets: buildStackDatasets(series || [], matrix || [], importes || [])
-    },
-    options: {
-      responsive: true,
-      animation: false,
-      interaction: { mode: 'index', intersect: false, axis: 'x' },
-      scales: {
-        x: { stacked: true },
-        y: {
-          stacked: true,
-          position: 'left',
-          beginAtZero: true,
-          title: { display: true, text: 'Nº licitacións' },
-          ticks: {
-            stepSize: 1,
-            callback: v => Number.isInteger(v) ? v : null
-          }
-        },
-        y1: {
-          position: 'right',
-          beginAtZero: true,
-          grid: { drawOnChartArea: false },
-          ticks: {
-            callback: v => new Intl.NumberFormat('es-ES', {
-              style: 'currency', currency: 'EUR'
-            }).format(v)
-          },
-          title: { display: true, text: 'Importe total (€)' }
-        }
-      },
-      plugins: {
-        legend: { display: true },
-        tooltip: {
-          callbacks: {
-            label: function (ctx) {
-              // Ocultar se o valor é 0
-              if (ctx.parsed.y === 0) {
-                return null;
+              // engadimos un footer co TOTAL da barra apilada
+              footer: (items) => {
+                if (!items || !items.length) return '';
+                const idx = items[0].dataIndex;
+                const total = stackTotalAt(items[0].chart, idx);
+                return 'Total: ' + total;
               }
-              if (ctx.dataset.type === 'line') {
-                return ctx.dataset.label + ': ' +
-                  new Intl.NumberFormat('es-ES', {
-                    style: 'currency', currency: 'EUR'
-                  }).format(ctx.parsed.y);
-              }
-              return ctx.dataset.label + ': ' + ctx.parsed.y;
             }
           }
         }
       }
-    }
+    });
+  }
 
+  // Gráfica “Importe por Tipo”
+  function renderImp(labels, series, matrix){
+    const el = document.getElementById('chartImpTipos');
+    if (chImp) { chImp.destroy(); chImp=null; }
+    chImp = new Chart(el,{
+      type:'bar',
+      data:{ labels: labels||[], datasets: buildStack(series, matrix) },
+      options:{
+        maintainAspectRatio: false, responsive:true, interaction:{mode:'index',intersect:false,axis:'x'},
+        scales:{
+          x:{stacked:true},
+          y:{stacked:true, beginAtZero:true,
+             ticks:{ callback:v=>new Intl.NumberFormat('es-ES',{style:'currency',currency:'EUR'}).format(v)}}
+        },
+        plugins:{
+          legend:{ display:true },
+          tooltip:{
+            callbacks:{
+              // ocultar 0 e formatar € por segmento
+              label: function(ctx){
+                const v = (ctx.parsed && typeof ctx.parsed.y!=='undefined') ? ctx.parsed.y : ctx.parsed;
+                if (v === 0) return null;
+                return ctx.dataset.label + ': ' +
+                  new Intl.NumberFormat('es-ES',{style:'currency',currency:'EUR'}).format(v);
+              },
+
+              // footer: TOTAL € da barra apilada
+              footer: (items) => {
+                if (!items || !items.length) return '';
+                const idx = items[0].dataIndex;
+                const total = stackTotalAt(items[0].chart, idx);
+                return 'Total: ' + new Intl.NumberFormat('es-ES',{style:'currency',currency:'EUR'}).format(total);
+              }
+            }
+          }
+        }
+      }
+    });
+  }
+
+  // Gráfica “Top 10 adxudicatarios” (horizontal)
+  function renderAdx(labels, series, matrix){
+    const el = document.getElementById('chartAdxTop');
+    if (chAdx) { chAdx.destroy(); chAdx=null; }
+    chAdx = new Chart(el,{
+      type:'bar',
+      data:{ labels: labels||[], datasets: buildStack(series, matrix) },
+      options:{
+        indexAxis:'y',
+        responsive:true, interaction:{mode:'index',intersect:false,axis:'y'},
+        scales:{ y:{stacked:true}, x:{stacked:true, beginAtZero:true, ticks:{ stepSize:1, callback:v=>Number.isInteger(v)?v:null}}},
+        plugins:{ legend:{display:true}, tooltip:{ callbacks:{ label: tooltipLabelNoZeros } } }
+      }
+    });
+  }
+
+  // Gráfica “Top 20 importes”
+  function renderTop(labels, amounts, urls, objects){
+  const el = document.getElementById('chartTopImportes');
+  if (chTop) { chTop.destroy(); chTop=null; }
+
+  chTop = new Chart(el,{
+    type:'bar',
+    data:{
+      labels: labels || [],
+      datasets:[{
+        type:'bar',
+        label:'Importe (€)',
+        data: amounts || [],
+        borderWidth: 1,
+        // feedback visual en hover (verde)
+        hoverBackgroundColor: 'rgba(76, 175, 80, 0.7)',
+        hoverBorderColor: 'rgba(76, 175, 80, 1)',
+      }]
+    },
+    options:{
+      indexAxis:'y',
+      // gardamos as URLs aquí para poder consultalas en onHover / tooltip
+      linkUrls: urls || [],
+      linkObjects: objects || [],
+
+      responsive:true,
+      interaction:{ mode:'nearest', intersect:false }, // mellor detección
+      plugins:{ 
+        legend:{ display:false },
+        tooltip:{ 
+          callbacks:{
+            title:(items)=> items[0]?.label || '',
+            label:(ctx)=> 'Importe: ' + new Intl.NumberFormat('es-ES',{style:'currency',currency:'EUR'}).format(ctx.parsed.x),
+            afterBody:(items)=>{
+              const i = items[0].dataIndex;
+              const u = (chTop.options.linkUrls||[])[i] || '';
+              const exp = u.split('q=')[1] ? decodeURIComponent(u.split('q=')[1]) : '';
+              const obj = (chTop.options.linkObjects||[])[i] || '';
+              const lines=[];
+              if (exp) lines.push('Expediente: '+exp);
+              if (obj) lines.push('Objeto: '+obj);
+              return lines;
+            }
+          }
+        }
+      },
+      scales:{
+        x:{ beginAtZero:true, ticks:{ callback:v=>new Intl.NumberFormat('es-ES',{style:'currency',currency:'EUR'}).format(v) } },
+        y:{ ticks:{ autoSkip:false } }
+      },
+
+      // Cursor "pointer" só se hai URL na barra baixo o rato
+      onHover: (event, elements, chart) => {
+        const canvas = event?.native?.target || chart.canvas;
+        let cursor = 'default';
+        // usamos a detección "manual" para ser máis tolerantes
+        const hits = chart.getElementsAtEventForMode(event, 'nearest', {intersect:false}, true);
+        if (hits && hits.length) {
+          const idx = hits[0].index;
+          const href = (chart.options.linkUrls || [])[idx];
+          if (href) cursor = 'pointer';
+        }
+        if (canvas) canvas.style.cursor = cursor;
+      },
+
+      // click abre nunha nova lapela
+      onClick: (event, elements, chart)=>{
+        const hits = chart.getElementsAtEventForMode(event, 'nearest', {intersect:false}, true);
+        if (!hits || !hits.length) return;
+        const idx = hits[0].index;
+        const href = (chart.options.linkUrls || [])[idx];
+        if (href) window.open(href, '_blank', 'noopener');
+      }
+    }
   });
 }
 
 
-
-
-
-const TiposLabels = {{ .TiposLabels }};
-const TiposCounts = {{ .TiposCounts }};
-const ImpLabels   = {{ .ImpLabels }};
-const ImpTotals   = {{ .ImpTotals }};
-const AdxLabels   = {{ .AdxLabels }};
-const AdxCounts   = {{ .AdxCounts }};
-const AnexosLabels= {{ .AnexosLabels }};
-const AnexosCounts= {{ .AnexosCounts }};
-
-const AdxMesLabels   = {{ .AdxMesLabels }};
-const AdxMesCounts   = {{ .AdxMesCounts }};
-const AdxMesImportes = {{ .AdxMesImportes }};
-const AdxMesSeries      = {{ .AdxMesSeries }};
-const AdxMesCountsStack = {{ .AdxMesCountsStack }};
-
-// 💡 crear a gráfica inicial “desde cero”
-renderAdxMensuais(AdxMesLabels, AdxMesSeries, AdxMesCountsStack, AdxMesImportes);
-
-const TopLicLabels  = {{ .TopLicLabels }};
-const TopLicAmounts = {{ .TopLicAmounts }};
-const TopLicURLs    = {{ .TopLicURLs }};
-const TopLicObjects  = {{ .TopLicObjects }};
-
-const chTopImportes = new Chart(document.getElementById('chartTopImportes'), {
-  type: 'bar',
-  data: {
-    labels: TopLicLabels,
-    datasets: [{
-      label: 'Importe (€)',
-      data: TopLicAmounts,
-      // feedback visual en hover:
-      hoverBackgroundColor: 'rgba(76, 175, 80, 0.7)',  // verde ao pasar o rato
-      hoverBorderColor: 'rgba(76, 175, 80, 1)',
-      borderWidth: 1
-    }]
-  },
-  options: {
-    // para o plugin/click e para acceder dende o tooltip
-    linkUrls:    TopLicURLs,
-    linkObjects: TopLicObjects,
-
-    indexAxis: 'y',
-    responsive: true,
-    plugins: {
-      legend: { display: false },
-      tooltip: {
-        callbacks: {
-          // título do tooltip: poñemos a etiqueta (normalmente o expediente)
-          title: (items) => {
-            const i = items[0].dataIndex;
-            return items[0].chart.data.labels[i] || '';
-          },
-          // liña principal: importe en €
-          label: (ctx) => {
-            const v = ctx.parsed.x;
-            return 'Importe: ' + new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' }).format(v);
-          },
-          // bloque extra: Objeto del contrato
-          afterBody: (items) => {
-            const i   = items[0].dataIndex;
-            const url = (chTopImportes.options.linkUrls || [])[i] || '';
-            const exp = url.split('q=')[1] ? decodeURIComponent(url.split('q=')[1]) : '';
-
-            const objs = items[0].chart.options.linkObjects || [];
-            const obj = objs[i];
-
-            return exp ? ['Expediente: ' + exp, 'Objeto: ' + obj] : [];
-          }
-        }
-      }
-    },
-    scales: {
-      x: {
-        beginAtZero: true,
-        ticks: { callback: v => new Intl.NumberFormat('es-ES',{style:'currency',currency:'EUR'}).format(v) },
-        title: { display: true, text: 'Importe' }
-      },
-      y: { ticks: { autoSkip: false } }
-    }
+  // Gráfica tarta “Con anexos”
+  function renderAnexos(labels, counts){
+    const el = document.getElementById('chartAnexos');
+    if (chAnx) { chAnx.destroy(); chAnx=null; }
+    chAnx = new Chart(el,{
+      type:'pie',
+      data:{ labels: labels||[], datasets:[{
+        data: counts||[],
+        backgroundColor:['rgba(76,175,80,0.7)','rgba(158,158,158,0.7)'],
+        borderColor:['rgba(76,175,80,1)','rgba(158,158,158,1)'],
+        borderWidth:1
+      }]},
+      options:{ responsive:true, plugins:{ legend:{position:'bottom'} } }
+    });
   }
-});
 
-// click nunha barra → abre o expediente nunha pestana nova
-document.getElementById('chartTopImportes').addEventListener('click', (evt)=>{
-  const pts = chTopImportes.getElementsAtEventForMode(evt, 'nearest', {intersect: true}, true);
-  if (!pts.length) return;
-  const idx = pts[0].index;
-  const urls = chTopImportes.options.linkUrls || [];
-  const href = urls[idx];
-  if (href) window.open(href, '_blank', 'noopener');
-});
+  // Render inicial (datos do servidor)
+  renderAdxMensuais(AdxMesLabels, AdxMesSeries, AdxMesCountsStack, AdxMesImportes);
+  renderTipos(TiposLabels, TiposSeries, TiposCountsStack);
+  renderImp(ImpLabels, ImpSeries, ImpTotalsStack);
+  renderAdx(AdxLabels, AdxSeries, AdxCountsStack);
+  renderTop(TopLicLabels, TopLicAmounts, TopLicURLs, TopLicObjects);
+  renderAnexos({{ .AnexosLabels }}, {{ .AnexosCounts }});
 
-
-// Charts iniciais
-const chTipos = new Chart(document.getElementById('chartTipos'), {
-  type: 'bar',
-  data: { labels: TiposLabels, datasets: [{ label: 'Contratos', data: TiposCounts }] },
-  options: { 
-    responsive: true,
-    interaction: { mode: 'index', intersect: false, axis: 'x' },
-    plugins:{ legend:{ display:false }, tooltip: { position: 'nearest' } } 
+  // Instant Search
+  const $q = document.getElementById('q');
+  let t=null;
+  function doFetch(){
+    const v = $q.value.trim();
+    const p = new URLSearchParams();
+    if (v.length>=3) p.set('q', v);
+    fetch('/api/summary_all?'+p.toString())
+      .then(r=>r.json())
+      .then(data=>{
+        renderAdxMensuais(data.adxMesLabels, data.adxMesSeries, data.adxMesCountsStack, data.adxMesImportes);
+        renderTipos(data.tiposLabels, data.tiposSeries, data.tiposCountsStack);
+        renderImp(data.impLabels, data.impSeries, data.impTotalsStack);
+        renderAdx(data.adxLabels, data.adxSeries, data.adxCountsStack);
+        renderTop(data.topLicLabels, data.topLicAmounts, data.topLicUrls, data.topLicObjects);
+        renderAnexos(data.anexosLabels, data.anexosCounts);
+      })
+      .catch(console.error);
   }
-});
-const chImp = new Chart(document.getElementById('chartImportes'), {
-  type: 'bar',
-  data: { labels: ImpLabels, datasets: [{ label: '€ total', data: ImpTotals }] },
-  options: {
-    responsive: true,
-    interaction: { mode: 'index', intersect: false, axis: 'x' },
-    plugins:{ legend:{ display:false }, tooltip: { callbacks: {
-      label: (ctx)=> new Intl.NumberFormat('es-ES',{style:'currency',currency:'EUR'}).format(ctx.parsed.y)
-    }, position: 'nearest' }},
-    scales: { y: { ticks: { callback: (v)=> new Intl.NumberFormat('es-ES').format(v) } } }
-  }
-});
-const chAdx = new Chart(document.getElementById('chartAdxudicatarios'), {
-  type: 'bar',
-  data: { labels: AdxLabels, datasets: [{ label: 'Contratos', data: AdxCounts }] },
-  options: { indexAxis: 'y', responsive: true, plugins:{ legend:{ display:false } }, scales: { x: { beginAtZero: true } } }
-});
-const chAnx = new Chart(document.getElementById('chartAnexos'), {
-  type: 'pie',
-  data: { labels: AnexosLabels, datasets: [{ data: AnexosCounts }] },
-  options: { responsive: true }
-});
-
-// Instant search (3+ chars) + botón Aplicar
-const form   = document.querySelector('form[role="search"]');
-const qInput = form.querySelector('input[name="q"]');
-
-function debounce(fn, ms){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
-
-async function loadAll() {
-  const q = (qInput.value || "").trim();
-  if (q.length>0 && q.length<3) return;
-
-  const params = new URLSearchParams({ q });
-  const res = await fetch('/api/summary_all?' + params.toString(), { headers: { 'Accept':'application/json' } });
-  if (!res.ok) return;
-
-  const ct = res.headers.get('content-type') || '';
-  if (!ct.includes('application/json')) {
-    console.error('Esperaba JSON en /api/summary_all, chegou:', ct);
-    return;
-  }
-  const data = await res.json();
-
-  chTipos.data.labels = data.tiposLabels || [];
-  chTipos.data.datasets[0].data = data.tiposCounts || [];
-  chTipos.update();
-
-  chImp.data.labels = data.impLabels || [];
-  chImp.data.datasets[0].data = data.impTotals || [];
-  chImp.update();
-
-  chAdx.data.labels = data.adxLabels || [];
-  chAdx.data.datasets[0].data = data.adxCounts || [];
-  chAdx.update();
-
-  chAnx.data.labels = data.anexosLabels || [];
-  chAnx.data.datasets[0].data = data.anexosCounts || [];
-  chAnx.update();
-
-  chAdxMensuais.data.labels = data.adxMesLabels || [];
-  chAdxMensuais.data.datasets[0].data = data.adxMesCounts || [];
-  chAdxMensuais.data.datasets[1].data = data.adxMesImportes || [];
-  chAdxMensuais.update();
-
-  chTopImportes.options.linkUrls = data.topLicUrls || [];
-  chTopImportes.options.linkObjects = data.topLicObjects || [];
-  chTopImportes.data.labels = data.topLicLabels || [];
-  chTopImportes.data.datasets[0].data = data.topLicAmounts || [];
-  chTopImportes.update();
-  // refrescar lista textual para poder seleccionar/copiar
-  //renderTopList(data.topLicLabels, data.topLicUrls);
-
-  // reload de data para importes
-  renderAdxMensuais(
-    data.adxMesLabels || [],
-    data.adxMesSeries || [],
-    data.adxMesCountsStack || [],
-    data.adxMesImportes || []
-  );
-
-  // actualizar URL sen recargar
-  const url = new URL(location.href);
-  if (q) url.searchParams.set('q', q); else url.searchParams.delete('q');
-  history.replaceState(null, '', url);
-}
-
-const loadDebounced = debounce(loadAll, 180);
-
-form.addEventListener('submit', (e)=>{ e.preventDefault(); loadAll(); });
-qInput.addEventListener('input', loadDebounced);
-</script>
-
+  $q.addEventListener('input', ()=>{ clearTimeout(t); t=setTimeout(doFetch, 200); });
+  </script>
 </body>
 </html>
 {{ end }}

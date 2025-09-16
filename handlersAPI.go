@@ -36,6 +36,12 @@ func (s *server) handleAPISummaryAll(w http.ResponseWriter, r *http.Request) {
 	countsByMonth := map[string]map[string]int{} // table -> month(YYYY-MM) -> count
 	var stackTables []string                     // orde estable das táboas
 
+	// para apilar o resto de barras tamén
+	tiposCountByTable := map[string]map[string]int{}
+	tiposImporteByTable := map[string]map[string]float64{}
+	adxCountByTable := map[string]map[string]int{}
+	var stackTablesAll []string
+
 	type topItem struct {
 		Label  string
 		Amount float64
@@ -68,6 +74,13 @@ func (s *server) handleAPISummaryAll(w http.ResponseWriter, r *http.Request) {
 					var c int
 					_ = rows.Scan(&k, &c)
 					tiposCount[k] += c
+
+					// -- para barras apiladas
+					if _, ok := tiposCountByTable[sel]; !ok {
+						tiposCountByTable[sel] = map[string]int{}
+						stackTablesAll = append(stackTablesAll, sel)
+					}
+					tiposCountByTable[sel][k] += c
 				}
 				rows.Close()
 			}
@@ -83,21 +96,52 @@ func (s *server) handleAPISummaryAll(w http.ResponseWriter, r *http.Request) {
 					var v float64
 					_ = rows.Scan(&k, &v)
 					tiposImporte[k] += v
+
+					// -- para barras apiladas
+					if _, ok := tiposImporteByTable[sel]; !ok {
+						tiposImporteByTable[sel] = map[string]float64{}
+					}
+					tiposImporteByTable[sel][k] += v
 				}
 				rows.Close()
 			}
 		}
-		if adxCol != "" {
-			q3 := fmt.Sprintf(`SELECT COALESCE(NULLIF(TRIM(%s),''),'(Sen adxudicatario)'), COUNT(*) FROM %s %s GROUP BY 1`,
-				quoteIdent(adxCol), baseQ, where)
+
+		// === Top adxudicatarios por táboa: detecta columna e agrega ===
+		if adjCol := pickAdjCol(s.db, sel); adjCol != "" {
+			q3 := fmt.Sprintf(`
+					SELECT
+						LOWER(TRIM(CAST(%[1]s AS TEXT))) as keynorm,
+						COALESCE(NULLIF(TRIM(CAST(%[1]s AS TEXT)), ''), '(sen nome)') as display,
+						COUNT(*) as c
+					FROM %[2]s
+					%[3]s
+					GROUP BY keynorm
+					ORDER BY c DESC
+					LIMIT 100
+				`, quoteIdent(adjCol), sel, where)
+
 			if rows, err := s.db.Query(q3, args...); err == nil {
-				for rows.Next() {
-					var k string
-					var c int
-					_ = rows.Scan(&k, &c)
-					adxCount[k] += c
+				defer rows.Close()
+				// mapa da táboa
+				m, ok := adxCountByTable[sel]
+				if !ok {
+					m = map[string]int{}
+					adxCountByTable[sel] = m
 				}
-				rows.Close()
+				for rows.Next() {
+					var keynorm, display string
+					var c int
+					if err := rows.Scan(&keynorm, &display, &c); err == nil {
+						if display == "" {
+							display = "(sen nome)"
+						}
+						// global
+						adxCount[display] += c
+						// por táboa (para pila)
+						m[display] += c
+					}
+				}
 			}
 		}
 
@@ -296,6 +340,45 @@ func (s *server) handleAPISummaryAll(w http.ResponseWriter, r *http.Request) {
 		adxCounts = append(adxCounts, p.V)
 	}
 
+	// Tipos (count)
+	var tiposSeries []string
+	var tiposCountsStack [][]int
+	tiposSeries = append(tiposSeries, stackTablesAll...)
+	for _, t := range tiposSeries {
+		row := make([]int, len(tiposLabels))
+		m := tiposCountByTable[t]
+		for i, lab := range tiposLabels {
+			row[i] = m[lab]
+		}
+		tiposCountsStack = append(tiposCountsStack, row)
+	}
+
+	// Tipos (importe)
+	var impSeries []string
+	var impTotalsStack [][]float64
+	impSeries = append(impSeries, stackTablesAll...)
+	for _, t := range impSeries {
+		row := make([]float64, len(impLabels))
+		m := tiposImporteByTable[t]
+		for i, lab := range impLabels {
+			row[i] = m[lab]
+		}
+		impTotalsStack = append(impTotalsStack, row)
+	}
+
+	// Adxudicatarios (Top 10)
+	var adxSeries []string
+	var adxCountsStack [][]int
+	adxSeries = append(adxSeries, stackTablesAll...)
+	for _, t := range adxSeries {
+		row := make([]int, len(adxLabels))
+		m := adxCountByTable[t]
+		for i, lab := range adxLabels {
+			row[i] = m[lab]
+		}
+		adxCountsStack = append(adxCountsStack, row)
+	}
+
 	mArr := make([]struct {
 		K string
 		V int
@@ -365,6 +448,12 @@ func (s *server) handleAPISummaryAll(w http.ResponseWriter, r *http.Request) {
 		"topLicObjects":     topLicObjects,
 		"adxMesSeries":      adxMesSeries,
 		"adxMesCountsStack": adxMesCountsStack,
+		"tiposSeries":       tiposSeries,
+		"tiposCountsStack":  tiposCountsStack,
+		"impSeries":         impSeries,
+		"impTotalsStack":    impTotalsStack,
+		"adxSeries":         adxSeries,
+		"adxCountsStack":    adxCountsStack,
 	})
 }
 
