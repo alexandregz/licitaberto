@@ -173,6 +173,32 @@
     }
     return ds;
   }
+
+  // quebra un texto por palabras cada "max" caracteres → devolve array de liñas
+  function wrapLines(str, max = 42) {
+    if (!str) return [];
+    const words = String(str).split(/\s+/);
+    const out = [];
+    let line = '';
+    for (const w of words) {
+      if ((line + (line ? ' ' : '') + w).length > max) {
+        if (line) out.push(line);
+        // se a palabra soa é moi longa, córtaa “a lo bestia” en trozos
+        if (w.length > max) {
+          for (let i = 0; i < w.length; i += max) {
+            out.push(w.slice(i, i + max));
+          }
+          line = '';
+        } else {
+          line = w;
+        }
+      } else {
+        line = line ? line + ' ' + w : w;
+      }
+    }
+    if (line) out.push(line);
+    return out;
+  }
   // ========= Fin helpers =========
 
   // Datos do servidor
@@ -346,21 +372,31 @@
 
       responsive:true,
       interaction:{ mode:'nearest', intersect:false }, // mellor detección
-      plugins:{ 
+      plugins:{
         legend:{ display:false },
-        tooltip:{ 
+        tooltip:{
           callbacks:{
-            title:(items)=> items[0]?.label || '',
-            label:(ctx)=> 'Importe: ' + new Intl.NumberFormat('es-ES',{style:'currency',currency:'EUR'}).format(ctx.parsed.x),
-            afterBody:(items)=>{
-              const i = items[0].dataIndex;
-              const u = (chTop.options.linkUrls||[])[i] || '';
-              const exp = u.split('q=')[1] ? decodeURIComponent(u.split('q=')[1]) : '';
-              const obj = (chTop.options.linkObjects||[])[i] || '';
-              const lines=[];
-              if (exp) lines.push('Expediente: '+exp);
-              if (obj) lines.push('Objeto: '+obj);
-              return lines;
+            // título: o “label” (agora obxecto do contrato) partido en varias liñas
+            title: (items) => {
+              const t = items?.[0]?.label || '';
+              return wrapLines(t, 40);
+            },
+            // a liña de importe pode quedar nunha liña:
+            label: (ctx) => 'Importe: ' + new Intl.NumberFormat('es-ES',{style:'currency',currency:'EUR'}).format(ctx.parsed.x),
+
+            // info extra: expediente + obxecto → tamén envoltos
+            afterBody: (items) => {
+              const i   = items[0].dataIndex;
+              const url = (chTop.options.linkUrls || [])[i] || '';
+              const exp = url.split('q=')[1] ? decodeURIComponent(url.split('q=')[1]) : '';
+              const obj = (chTop.options.linkObjects || [])[i] || '';
+
+              const raw = [];
+              if (exp) raw.push('Expediente: ' + exp);
+              if (obj) raw.push('Objeto: ' + obj);
+
+              // devolver un array de liñas (multi-liña real no tooltip)
+              return raw.flatMap(s => wrapLines(s, 44));
             }
           }
         }

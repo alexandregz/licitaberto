@@ -31,6 +31,32 @@
     }
   };
   Chart.register(cursorLinkPlugin);
+
+  // quebra un texto por palabras cada "max" caracteres → devolve array de liñas
+  function wrapLines(str, max = 42) {
+    if (!str) return [];
+    const words = String(str).split(/\s+/);
+    const out = [];
+    let line = '';
+    for (const w of words) {
+      if ((line + (line ? ' ' : '') + w).length > max) {
+        if (line) out.push(line);
+        // se a palabra soa é moi longa, córtaa “a lo bestia” en trozos
+        if (w.length > max) {
+          for (let i = 0; i < w.length; i += max) {
+            out.push(w.slice(i, i + max));
+          }
+          line = '';
+        } else {
+          line = w;
+        }
+      } else {
+        line = line ? line + ' ' + w : w;
+      }
+    }
+    if (line) out.push(line);
+    return out;
+  }
   </script>
 </head>
 <body>
@@ -142,21 +168,24 @@ const chTopImportes = new Chart(document.getElementById('chartTopImportes'), {
       legend: { display: false },
       tooltip: {
         callbacks: {
-          title: (items) => items[0].label, // agora labels = obxectos
+          title: (items) => wrapLines(items[0].label, 40),
           label: (ctx) => 'Importe: ' + new Intl.NumberFormat('es-ES',{style:'currency',currency:'EUR'}).format(ctx.parsed.x),
           afterBody: (items) => {
             const i   = items[0].dataIndex;
             const url = (chTopImportes.options.linkUrls || [])[i] || '';
             const exp = url.split('q=')[1] ? decodeURIComponent(url.split('q=')[1]) : '';
-
             const objs = items[0].chart.options.linkObjects || [];
             const obj = objs[i];
+            
+            const raw = [];
+            if (exp) raw.push('Expediente: ' + exp);
+            if (obj) raw.push('Objeto: ' + obj);
 
-            return exp ? ['Expediente: ' + exp, 'Objeto: ' + obj] : [];
+            // devolver un array de liñas (multi-liña real no tooltip)
+            return raw.flatMap(s => wrapLines(s, 44));
           }
         }
       }
-
     },
     scales: {
       x: {
