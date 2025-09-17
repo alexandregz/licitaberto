@@ -96,29 +96,30 @@
 
   <div class="grid">
     <section class="card span-12">
-      <h3>1. Número de adxudicacións e importes por mes <span id="taboa_num_adxudicacions_mes_a_mes">{{ .Table }}</span></h3>
+      <h3>Número de adxudicacións e importes por mes <span id="taboa_num_adxudicacions_mes_a_mes">{{ .Table }}</span></h3>
       <canvas id="chartAdxMensuais"></canvas>
     </section>
 
-    <section class="card span-12">
-      <h3>2. Top 20 maiores licitacións (importe)</h3>
-      <canvas id="chartTopImportes"></canvas>
-      <div id="topLicList" class="muted" style="margin-top:.5rem"></div>
-    </section>
-
-    <section class="card span-12">
-      <h3>3. Top 10 adxudicatarios por nº de contratos</h3>
-      <canvas id="chartAdxudicatarios"></canvas>
-    </section>
-
     <section class="card span-6">
-      <h3>4. Nº de contratos por tipo</h3>
+      <h3>Nº de contratos por tipo</h3>
       <canvas id="chartTipos"></canvas>
     </section>
 
     <section class="card span-6">
-      <h3>5. Importe total por tipo (€)</h3>
+      <h3>Importe total por tipo (€)</h3>
       <canvas id="chartImportes"></canvas>
+    </section>
+
+    <section class="card span-12">
+      <h3>Top 10 adxudicatarios por nº de contratos</h3>
+      <canvas id="chartAdxudicatarios"></canvas>
+    </section>
+
+
+    <section class="card span-12">
+      <h3>Top 20 maiores licitacións (importe)</h3>
+      <canvas id="chartTopImportes"></canvas>
+      <div id="topLicList" class="muted" style="margin-top:.5rem"></div>
     </section>
 
     <section class="card span-6">
@@ -176,7 +177,7 @@ const chTopImportes = new Chart(document.getElementById('chartTopImportes'), {
             const exp = url.split('q=')[1] ? decodeURIComponent(url.split('q=')[1]) : '';
             const objs = items[0].chart.options.linkObjects || [];
             const obj = objs[i];
-            
+
             const raw = [];
             if (exp) raw.push('Expediente: ' + exp);
             if (obj) raw.push('Objeto: ' + obj);

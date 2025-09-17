@@ -369,9 +369,17 @@
       // gardamos as URLs aquí para poder consultalas en onHover / tooltip
       linkUrls: urls || [],
       linkObjects: objects || [],
-
       responsive:true,
-      interaction:{ mode:'nearest', intersect:false }, // mellor detección
+
+      // importante: toda a fila é hoverable
+      interaction:{ mode:'index', intersect:false, axis:'y' },
+      // inflamos o hitbox das barras apiladas
+      datasets: {
+        bar: {
+          borderSkipped: false // evita bordes “mortos” no hover
+        }
+      },
+
       plugins:{
         legend:{ display:false },
         tooltip:{
