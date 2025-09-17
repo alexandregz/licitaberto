@@ -621,7 +621,11 @@ func (s *server) handleSummaryAll(w http.ResponseWriter, r *http.Request) {
 	// acumuladores
 	tiposCount := map[string]int{}
 	tiposImporte := map[string]float64{}
-	adxCount := map[string]int{}
+
+	// adx por chave normalizada: keynorm -> total
+	adxCountNorm := map[string]int{}
+	// etiqueta “bonita” para cada keynorm
+	adxDisplay := map[string]string{}
 	adxMensual := map[string]int{}
 	adxMensualImporte := map[string]float64{}
 
@@ -717,24 +721,21 @@ func (s *server) handleSummaryAll(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// === Top adxudicatarios por táboa: detecta columna e agrega ===
+		// === Top adxudicatarios por táboa: chave normalizada (keynorm) entre táboas ===
 		if adxCol := pickAdjCol(s.db, sel); adxCol != "" {
-			// normalizamos o nome para agrupar (baixa, trim). Pero devolvemos o "display" (primeiro visto).
 			q3 := fmt.Sprintf(`
-					SELECT
-						LOWER(TRIM(CAST(%[1]s AS TEXT))) as keynorm,
-						COALESCE(NULLIF(TRIM(CAST(%[1]s AS TEXT)), ''), '(sen nome)') as display,
-						COUNT(*) as c
-					FROM %[2]s
-					%[3]s
-					GROUP BY keynorm
-					ORDER BY c DESC
-					LIMIT 100
-				`, quoteIdent(adxCol), baseQ, where)
+				SELECT
+					unaccent_lower(TRIM(CAST(%[1]s AS TEXT))) as keynorm,
+					COALESCE(NULLIF(TRIM(CAST(%[1]s AS TEXT)), ''), '(sen nome)') as display,
+					COUNT(*) as c
+				FROM %[2]s
+				%[3]s
+				GROUP BY keynorm
+				ORDER BY c DESC
+			`, quoteIdent(adxCol), sel, where)
 
 			if rows, err := s.db.Query(q3, args...); err == nil {
 				defer rows.Close()
-				// mapa da táboa
 				m, ok := adxCountByTable[sel]
 				if !ok {
 					m = map[string]int{}
@@ -747,10 +748,14 @@ func (s *server) handleSummaryAll(w http.ResponseWriter, r *http.Request) {
 						if display == "" {
 							display = "(sen nome)"
 						}
-						// global (para escoller top 10 final)
-						adxCount[display] += c
+						// etiqueta por defecto para esa chave
+						if _, seen := adxDisplay[keynorm]; !seen {
+							adxDisplay[keynorm] = display
+						}
+						// global por chave normalizada
+						adxCountNorm[keynorm] += c
 						// por táboa (para pila)
-						m[display] += c
+						m[keynorm] += c
 					}
 				}
 			}
@@ -968,33 +973,48 @@ func (s *server) handleSummaryAll(w http.ResponseWriter, r *http.Request) {
 	}
 	// ---
 
-	// adxCount -> top 10 desc
-	adxArr := make([]kvI, 0, len(adxCount))
-	for k, v := range adxCount {
-		adxArr = append(adxArr, kvI{k, v})
+	// Top 10 adxudicatarios a partir de chave normalizada
+	aArr := make([]struct {
+		K string
+		V int
+	}, 0, len(adxCountNorm))
+	for k, v := range adxCountNorm {
+		aArr = append(aArr, struct {
+			K string
+			V int
+		}{k, v})
 	}
-	sort.Slice(adxArr, func(i, j int) bool { return adxArr[i].V > adxArr[j].V })
-	if len(adxArr) > 10 {
-		adxArr = adxArr[:10]
+	sort.Slice(aArr, func(i, j int) bool { return aArr[i].V > aArr[j].V })
+	if len(aArr) > 10 {
+		aArr = aArr[:10]
 	}
+
+	var adxNormKeys []string
 	var adxLabels []string
 	var adxCounts []int
-	for _, p := range adxArr {
-		adxLabels = append(adxLabels, p.K)
+	for _, p := range aArr {
+		adxNormKeys = append(adxNormKeys, p.K)
+		adxLabels = append(adxLabels, adxDisplay[p.K])
 		adxCounts = append(adxCounts, p.V)
 	}
-	// ── matriz apilada por entidade para "Top 10 adxudicatarios"
+
+	// Matriz apilada por entidade para "Top 10 adxudicatarios"
 	var adxSeries []string
-	var adxCountsStack [][]int // [serie][labelIndex]
-	adxSeries = append(adxSeries, stackTablesAll...)
+	for t := range adxCountByTable {
+		adxSeries = append(adxSeries, t)
+	}
+	sort.Strings(adxSeries)
+
+	var adxCountsStack [][]int
 	for _, t := range adxSeries {
-		row := make([]int, len(adxLabels))
+		row := make([]int, len(adxNormKeys))
 		m := adxCountByTable[t]
-		for i, lab := range adxLabels {
-			row[i] = m[lab]
+		for i, norm := range adxNormKeys {
+			row[i] = m[norm]
 		}
 		adxCountsStack = append(adxCountsStack, row)
 	}
+
 	// ---
 
 	// JSON seguro para template

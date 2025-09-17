@@ -28,7 +28,8 @@ func (s *server) handleAPISummaryAll(w http.ResponseWriter, r *http.Request) {
 	// acumuladores
 	tiposCount := map[string]int{}
 	tiposImporte := map[string]float64{}
-	adxCount := map[string]int{}
+	adxCountNorm := map[string]int{}
+	adxDisplay := map[string]string{}
 	adxMensual := map[string]int{}
 	adxMensualImporte := map[string]float64{}
 
@@ -110,20 +111,18 @@ func (s *server) handleAPISummaryAll(w http.ResponseWriter, r *http.Request) {
 		// === Top adxudicatarios por táboa: detecta columna e agrega ===
 		if adjCol := pickAdjCol(s.db, sel); adjCol != "" {
 			q3 := fmt.Sprintf(`
-					SELECT
-						LOWER(TRIM(CAST(%[1]s AS TEXT))) as keynorm,
-						COALESCE(NULLIF(TRIM(CAST(%[1]s AS TEXT)), ''), '(sen nome)') as display,
-						COUNT(*) as c
-					FROM %[2]s
-					%[3]s
-					GROUP BY keynorm
-					ORDER BY c DESC
-					LIMIT 100
-				`, quoteIdent(adjCol), sel, where)
+				SELECT
+					unaccent_lower(TRIM(CAST(%[1]s AS TEXT))) as keynorm,
+					COALESCE(NULLIF(TRIM(CAST(%[1]s AS TEXT)), ''), '(sen nome)') as display,
+					COUNT(*) as c
+				FROM %[2]s
+				%[3]s
+				GROUP BY keynorm
+				ORDER BY c DESC
+			`, quoteIdent(adxCol), baseQ, where)
 
 			if rows, err := s.db.Query(q3, args...); err == nil {
 				defer rows.Close()
-				// mapa da táboa
 				m, ok := adxCountByTable[sel]
 				if !ok {
 					m = map[string]int{}
@@ -136,10 +135,11 @@ func (s *server) handleAPISummaryAll(w http.ResponseWriter, r *http.Request) {
 						if display == "" {
 							display = "(sen nome)"
 						}
-						// global
-						adxCount[display] += c
-						// por táboa (para pila)
-						m[display] += c
+						if _, seen := adxDisplay[keynorm]; !seen {
+							adxDisplay[keynorm] = display
+						}
+						adxCountNorm[keynorm] += c
+						m[keynorm] += c
 					}
 				}
 			}
@@ -325,19 +325,44 @@ func (s *server) handleAPISummaryAll(w http.ResponseWriter, r *http.Request) {
 		impTotals = append(impTotals, p.V)
 	}
 
-	aArr := make([]kvI, 0, len(adxCount))
-	for k, v := range adxCount {
-		aArr = append(aArr, kvI{k, v})
+	aArr := make([]struct {
+		K string
+		V int
+	}, 0, len(adxCountNorm))
+	for k, v := range adxCountNorm {
+		aArr = append(aArr, struct {
+			K string
+			V int
+		}{k, v})
 	}
 	sort.Slice(aArr, func(i, j int) bool { return aArr[i].V > aArr[j].V })
 	if len(aArr) > 10 {
 		aArr = aArr[:10]
 	}
+
+	var adxNormKeys []string
 	var adxLabels []string
 	var adxCounts []int
 	for _, p := range aArr {
-		adxLabels = append(adxLabels, p.K)
+		adxNormKeys = append(adxNormKeys, p.K)
+		adxLabels = append(adxLabels, adxDisplay[p.K])
 		adxCounts = append(adxCounts, p.V)
+	}
+
+	var adxSeries []string
+	for t := range adxCountByTable {
+		adxSeries = append(adxSeries, t)
+	}
+	sort.Strings(adxSeries)
+
+	var adxCountsStack [][]int
+	for _, t := range adxSeries {
+		row := make([]int, len(adxNormKeys))
+		m := adxCountByTable[t]
+		for i, norm := range adxNormKeys {
+			row[i] = m[norm]
+		}
+		adxCountsStack = append(adxCountsStack, row)
 	}
 
 	// Tipos (count)
@@ -364,19 +389,6 @@ func (s *server) handleAPISummaryAll(w http.ResponseWriter, r *http.Request) {
 			row[i] = m[lab]
 		}
 		impTotalsStack = append(impTotalsStack, row)
-	}
-
-	// Adxudicatarios (Top 10)
-	var adxSeries []string
-	var adxCountsStack [][]int
-	adxSeries = append(adxSeries, stackTablesAll...)
-	for _, t := range adxSeries {
-		row := make([]int, len(adxLabels))
-		m := adxCountByTable[t]
-		for i, lab := range adxLabels {
-			row[i] = m[lab]
-		}
-		adxCountsStack = append(adxCountsStack, row)
 	}
 
 	mArr := make([]struct {
