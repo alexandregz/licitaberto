@@ -48,13 +48,27 @@ ToDo
 
 ## Screenshots
 
+1. Imaxes de resumo global
+
+![Resumo global licitacións](imaxes/global/001.png)
+
+![Global agrupado por tipo e importe](imaxes/global/002.png)
+
+![Top 10 adxudicatarios global](imaxes/global/003.png)
+
+![Top 20 adxudicacións global](imaxes/global/004.png)
+
+
+
+2. Imaxes de táboas
+
 ![Listado de taboas](imaxes/001.png)
 
 ![Táboa](imaxes/002.png)
 
 ![Gráfica desplegada](imaxes/003.png)
 
-![Outra tábaos](imaxes/004.png)
+![Outra táboas](imaxes/004.png)
 
 ![Exemplo de táboa de ficheiros](imaxes/005.png)
 
