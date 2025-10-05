@@ -27,9 +27,10 @@ Pódese empregar fisicamente ou empregar `Docker`(recomendado).
 ## Uso
 
 ```bash
-alex@vosjod:~/Development/licitaberto $ go run . --db ../plataforma_contratacion_estado_scrapper/ames.db --mode web --addr 127.0.0.1:8080
-2025/09/12 00:42:50 Web UI en http://127.0.0.1:8080
-2025/09/12 00:42:50 PDFs en ../plataforma_contratacion_estado_scrapper/PDF/ames
+alex@vosjod:~/Development/licitaberto (main)$ go run . --db ../plataforma_contratacion_estado_scrapper/ames.db --mode web --addr 0.0.0.0:8080
+2025/10/05 02:10:20 concello: Ames
+2025/10/05 02:10:20 Web UI en http://0.0.0.0:8080
+2025/10/05 02:10:20 PDFs en ../plataforma_contratacion_estado_scrapper/PDF/ames
 ```
 
 ## Uso TUI
