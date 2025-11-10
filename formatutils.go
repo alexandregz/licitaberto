@@ -28,20 +28,87 @@ func stripExt(path string) string {
 
 // conversores formatos de importes
 
-// Converte "12.345,67" -> 12345.67
+// Converte cadeas tipo "12.345,67" ou "12,345.67" -> 12345.67
+// Tamén toléea: "12 345,67 €", "€12,345.67", "-1.234,56", etc.
 func parseEuroNumber(s string) (float64, bool) {
 	s = strings.TrimSpace(s)
-	if !euroNumRe.MatchString(s) {
-		return 0, false
+
+	// eliminar símbolos de moeda e espazos internos comúns
+	s = strings.ReplaceAll(s, "€", "")
+	s = strings.ReplaceAll(s, "$", "")
+	s = strings.ReplaceAll(s, "£", "")
+	s = strings.ReplaceAll(s, " ", "")
+
+	// se a cadea xa cumpre o patrón "euro" conhecido, procesámola como antes
+	if euroNumRe.MatchString(s) {
+		// quitar puntos de milleiro e cambiar coma por punto
+		s2 := strings.ReplaceAll(s, ".", "")
+		s2 = strings.ReplaceAll(s2, ",", ".")
+		f, err := strconv.ParseFloat(s2, 64)
+		if err != nil {
+			return 0, false
+		}
+		return f, true
 	}
-	// quitar puntos de milleiro e cambiar coma por punto
-	s = strings.ReplaceAll(s, ".", "")
-	s = strings.ReplaceAll(s, ",", ".")
-	f, err := strconv.ParseFloat(s, 64)
-	if err != nil {
-		return 0, false
+
+	// se non coincide co patrón euro, intentamos detectar e corrixir automaticamente
+	hasDot := strings.Contains(s, ".")
+	hasComma := strings.Contains(s, ",")
+
+	// caso: ten ambos separadores '.' e ','
+	if hasDot && hasComma {
+		// se a última coma está despois do último punto => coma é decimal (estilo europeo con milleiros con puntos)
+		if strings.LastIndex(s, ",") > strings.LastIndex(s, ".") {
+			s2 := strings.ReplaceAll(s, ".", "")
+			s2 = strings.ReplaceAll(s2, ",", ".")
+			if f, err := strconv.ParseFloat(s2, 64); err == nil {
+				return f, true
+			}
+		} else {
+			// caso contrario: punto decimal e comas de milleiro -> quitar comas
+			s2 := strings.ReplaceAll(s, ",", "")
+			if f, err := strconv.ParseFloat(s2, 64); err == nil {
+				return f, true
+			}
+		}
 	}
-	return f, true
+
+	// caso: só coma presente
+	if hasComma && !hasDot {
+		// se hai exactamente dúas xeracións despois da última coma, considerámola decimal
+		if idx := strings.LastIndex(s, ","); idx != -1 && len(s)-idx-1 == 2 {
+			s2 := strings.ReplaceAll(s, ".", "")
+			s2 = strings.ReplaceAll(s2, ",", ".")
+			if f, err := strconv.ParseFloat(s2, 64); err == nil {
+				return f, true
+			}
+		} else {
+			// senón, asumimos que as comas son de milleiro -> quitámolas
+			s2 := strings.ReplaceAll(s, ",", "")
+			if f, err := strconv.ParseFloat(s2, 64); err == nil {
+				return f, true
+			}
+		}
+	}
+
+	// caso: só punto presente
+	if hasDot && !hasComma {
+		// se hai exactamente dúas cifras despois do punto, considerámolo decimal (e parseámolo tal cal)
+		if idx := strings.LastIndex(s, "."); idx != -1 && len(s)-idx-1 == 2 {
+			if f, err := strconv.ParseFloat(s, 64); err == nil {
+				return f, true
+			}
+		} else {
+			// senón, asumimos que os puntos son de milleiro -> quitámolos
+			s2 := strings.ReplaceAll(s, ".", "")
+			if f, err := strconv.ParseFloat(s2, 64); err == nil {
+				return f, true
+			}
+		}
+	}
+
+	// se todo falla, devolvemos false
+	return 0, false
 }
 
 // Expr SQL para ordenar numericamente segundo estilo
